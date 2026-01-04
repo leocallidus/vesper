@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RS Screensaver
+Comment=Rust Screensaver Application
+Exec=rs-screensaver
+TryExec=rs-screensaver
+Icon=rs-screensaver
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+X-AppImage-Integrate=true
