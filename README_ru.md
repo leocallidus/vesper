@@ -1,4 +1,4 @@
-# RS Screensaver
+# Vesper
 
 [English](README.md) | [Русский](README_ru.md)
 
@@ -57,7 +57,7 @@ cargo build --release
 cargo run --release
 
 # Или напрямую
-./target/release/rs-screensaver
+./target/release/vesper
 ```
 
 ## AppImage
@@ -68,24 +68,24 @@ cargo run --release
 bash scripts/build_appimage.sh
 ```
 
-AppImage появится в `dist/rs-screensaver-<arch>.AppImage`.
+AppImage появится в `dist/vesper-<arch>.AppImage`.
 
 ## CLI управление (D-Bus)
 
 ```bash
-./target/release/rs-screensaver status
-./target/release/rs-screensaver start
-./target/release/rs-screensaver stop
-./target/release/rs-screensaver show-settings
-./target/release/rs-screensaver show
-./target/release/rs-screensaver enable
-./target/release/rs-screensaver disable
-./target/release/rs-screensaver inhibit
-./target/release/rs-screensaver uninhibit
-./target/release/rs-screensaver set-enabled true
-./target/release/rs-screensaver set-inhibit false
-./target/release/rs-screensaver switch-profile 2
-./target/release/rs-screensaver quit
+./target/release/vesper status
+./target/release/vesper start
+./target/release/vesper stop
+./target/release/vesper show-settings
+./target/release/vesper show
+./target/release/vesper enable
+./target/release/vesper disable
+./target/release/vesper inhibit
+./target/release/vesper uninhibit
+./target/release/vesper set-enabled true
+./target/release/vesper set-inhibit false
+./target/release/vesper switch-profile 2
+./target/release/vesper quit
 ```
 
 ## Меню в трее
@@ -102,7 +102,7 @@ AppImage появится в `dist/rs-screensaver-<arch>.AppImage`.
 
 ## Конфигурация
 
-- Файл настроек: `~/.config/rs-screensaver/config.json`
+- Файл настроек: `~/.config/vesper/config.json`
 - Профили и параметры режимов хранятся отдельно для каждого профиля
 
 ## Архитектура

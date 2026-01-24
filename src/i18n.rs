@@ -88,10 +88,10 @@ pub fn profile_name(language: Language, index: usize) -> String {
 pub fn cli_usage(language: Language) -> &'static str {
     match resolve_language(language) {
         Language::Russian => {
-            "Управление RS Screensaver:\n\n  rs-screensaver <команда> [аргументы]\n\nКоманды:\n  start                     Запустить скринсейвер\n  stop                      Остановить скринсейвер\n  show-settings             Открыть настройки\n  show                      Показать главное окно\n  enable | disable           Включить/выключить автозапуск\n  inhibit | uninhibit        Включить/выключить блокировку сна\n  set-enabled <bool>         Явно задать включение (true/false)\n  set-inhibit <bool>         Явно задать блокировку сна (true/false)\n  switch-profile <index>     Переключить профиль (0-254)\n  quit                       Завершить приложение\n  status | --status          Краткий статус\n  help                       Показать помощь"
+            "Управление Vesper:\n\n  vesper <команда> [аргументы]\n\nКоманды:\n  start                     Запустить скринсейвер\n  stop                      Остановить скринсейвер\n  show-settings             Открыть настройки\n  show                      Показать главное окно\n  enable | disable           Включить/выключить автозапуск\n  inhibit | uninhibit        Включить/выключить блокировку сна\n  set-enabled <bool>         Явно задать включение (true/false)\n  set-inhibit <bool>         Явно задать блокировку сна (true/false)\n  switch-profile <index>     Переключить профиль (0-254)\n  quit                       Завершить приложение\n  status | --status          Краткий статус\n  help                       Показать помощь"
         }
         Language::English => {
-            "RS Screensaver control:\n\n  rs-screensaver <command> [args]\n\nCommands:\n  start                     Start screensaver\n  stop                      Stop screensaver\n  show-settings             Open settings\n  show                      Show main window\n  enable | disable           Enable/disable auto start\n  inhibit | uninhibit        Enable/disable sleep inhibit\n  set-enabled <bool>         Explicitly set enabled (true/false)\n  set-inhibit <bool>         Explicitly set sleep inhibit (true/false)\n  switch-profile <index>     Switch profile (0-254)\n  quit                       Quit application\n  status | --status          Short status\n  help                       Show help"
+            "Vesper control:\n\n  vesper <command> [args]\n\nCommands:\n  start                     Start screensaver\n  stop                      Stop screensaver\n  show-settings             Open settings\n  show                      Show main window\n  enable | disable           Enable/disable auto start\n  inhibit | uninhibit        Enable/disable sleep inhibit\n  set-enabled <bool>         Explicitly set enabled (true/false)\n  set-inhibit <bool>         Explicitly set sleep inhibit (true/false)\n  switch-profile <index>     Switch profile (0-254)\n  quit                       Quit application\n  status | --status          Short status\n  help                       Show help"
         }
         Language::Auto => "",
     }
@@ -110,6 +110,19 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Не удалось выполнить D-Bus команду" => "Failed to execute D-Bus command",
         "Не удалось запустить сервис" => "Failed to start service",
         "Статус: не запущен" => "Status: not running",
+        "Мониторы" => "Monitors",
+        "Монитор" => "Monitor",
+        "Мониторы не найдены" => "No monitors found",
+        "Не удалось получить список мониторов" => "Failed to get monitor list",
+        "По умолчанию (активный профиль)" => "Default (active profile)",
+        "Назначьте профиль для каждого монитора (по умолчанию — активный профиль)." => {
+            "Assign a profile for each monitor (default is the active profile)."
+        }
+        "Интерактивный веб" => "Interactive web",
+        "Разрешить управление мышью (курсор будет видим)" => {
+            "Allow mouse interaction (cursor will be visible)"
+        }
+        "Сначала выберите паттерн: Водная рябь" => "Select pattern first: Water ripples",
         "Да" => "Yes",
         "Нет" => "No",
         "Активен: {active} • Включен: {enabled} • Сон: {inhibit} • Профиль: {} ({}) • Режим: {}" => {
@@ -131,6 +144,8 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Изображение" => "Image",
         "Видео" => "Video",
         "Слайдшоу" => "Slideshow",
+        "Python скрипт" => "Python script",
+        "GLSL шейдер" => "GLSL shader",
         "Список: {count}" => "List: {count}",
         "Список: {list_count}" => "List: {list_count}",
         "Список: {}" => "List: {}",
@@ -138,16 +153,32 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Звезды" => "Stars",
         "Звёзды" => "Stars",
         "Геометрия" => "Geometry",
+        "Дым/Чернила" => "Smoke/Ink",
+        "Водная рябь" => "Water ripples",
+        "Матрица 2.0" => "Matrix Rain 2.0",
+        "LCARS" => "LCARS",
+        "Терминал" => "Terminal",
+        "Фракталы" => "Fractals",
+        "Реакция-диффузия" => "Reaction-Diffusion",
+        "Фоновое изображение" => "Background image",
         "Скринсейвер не запущен: {message}" => "Screensaver not started: {message}",
         "список медиа пуст или недоступен" => "media list is empty or unavailable",
         "Файл не выбран" => "File not selected",
         "Файл не найден: {path}" => "File not found: {path}",
         "Путь не является файлом" => "Path is not a file",
         "Неподдерживаемый формат" => "Unsupported format",
+        "не настроено" => "not configured",
         "Папка не выбрана" => "Folder not selected",
+        "Папка" => "Folder",
+        "Предпросмотр не поддерживается" => "Preview not supported",
         "Папка не найдена: {path}" => "Folder not found: {path}",
         "Путь не является папкой" => "Path is not a folder",
         "В папке нет изображений" => "Folder has no images",
+        "В папке нет шейдера Image" => "Folder has no Image shader",
+        "Предупреждение: {message}" => "Warning: {message}",
+        "Обнаружены составные GLSL шейдеры. Если скринсейвер зависнет, используйте принудительное закрытие: {hotkey}" => {
+            "Composite GLSL shaders detected. If the screensaver hangs, use force close: {hotkey}"
+        }
         "URL не указан" => "URL not specified",
         "Неверный URL потока" => "Invalid stream URL",
         "Профили" => "Profiles",
@@ -171,6 +202,8 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Запуск скринсейвера" => "Start screensaver",
         "Нажмите комбинацию" => "Press shortcut",
         "Остановка скринсейвера" => "Stop screensaver",
+        "Принудительное закрытие" => "Force close",
+        "На случай зависания/ошибок GPU" => "In case of hangs/GPU errors",
         "Запустить" => "Start",
         "Блокировать сон" => "Block sleep",
         "Контент" => "Content",
@@ -183,6 +216,10 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Путь к файлу" => "File path",
         "Выберите изображение, видео или папку" => "Choose an image, video, or folder",
         "Выбрать..." => "Browse...",
+        "Проверить шейдеры" => "Check shaders",
+        "Показать найденные BufferA-D" => "Show detected BufferA-D",
+        "Проверить" => "Check",
+        "Проверка шейдеров" => "Shader check",
         "Информация" => "Info",
         "Нет данных" => "No data",
         "Интервал слайдшоу" => "Slideshow interval",
@@ -199,6 +236,26 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Плейлист" => "Playlist",
         "Очистить" => "Clear",
         "Предпросмотр" => "Preview",
+        "Превью" => "Preview",
+        "Сейчас играет" => "Now playing",
+        "Обложка и название трека (MPRIS)" => "Album art and track info (MPRIS)",
+        "Показывать «Сейчас играет»" => "Show “Now playing”",
+        "RSS/Новости" => "RSS/News",
+        "Бегущая строка из RSS лент" => "Scrolling ticker from RSS feeds",
+        "Показывать RSS-строку" => "Show RSS ticker",
+        "Скорость прокрутки" => "Scroll speed",
+        "пикс/с" => "px/s",
+        "Интервал обновления" => "Refresh interval",
+        "Минуты" => "Minutes",
+        "Добавить RSS ленту" => "Add RSS feed",
+        "Нет RSS лент" => "No RSS feeds",
+        "Системные показатели" => "System stats",
+        "Графики CPU/RAM (retro-tech)" => "CPU/RAM graphs (retro-tech)",
+        "Показывать System Stats" => "Show system stats",
+        "CPU" => "CPU",
+        "RAM" => "RAM",
+        "Пауза предпросмотра" => "Pause preview",
+        "Нет воспроизведения" => "Nothing is playing",
         "Путь скопирован" => "Path copied",
         "Питание" => "Power",
         "Громкость" => "Volume",
@@ -237,6 +294,16 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "День недели: %a %H:%M" => "Weekday: %a %H:%M",
         "Полная дата: %A, %d %B %Y" => "Full date: %A, %d %B %Y",
         "ISO: %F %T" => "ISO: %F %T",
+        "24ч (без нуля): %-H:%M" => "24h (no zero): %-H:%M",
+        "24ч с секундами и датой: %H:%M:%S  %d.%m" => "24h with seconds + date: %H:%M:%S  %d.%m",
+        "12ч с секундами: %I:%M:%S %p" => "12h with seconds: %I:%M:%S %p",
+        "День недели и дата: %a, %d.%m.%Y" => "Weekday + date: %a, %d.%m.%Y",
+        "Полный день и дата: %A  %d.%m" => "Full weekday + date: %A  %d.%m",
+        "ISO дата: %F" => "ISO date: %F",
+        "ISO дата и время: %F %R" => "ISO date + time: %F %R",
+        "Номер недели и день: Неделя %V, %a" => "Week number + day: Week %V, %a",
+        "День года: День %j" => "Day of year: Day %j",
+        "Время и часовой пояс: %H:%M %z" => "Time + timezone: %H:%M %z",
         "Формат" => "Format",
         "Строка формата" => "Format string",
         "Положение" => "Position",
@@ -250,8 +317,12 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Снизу по центру" => "Bottom center",
         "Снизу справа" => "Bottom right",
         "Размер текста" => "Text size",
+        "Часы в две строки" => "Two-line clock",
+        "Время (формат)" => "Time format",
+        "Дата (формат)" => "Date format",
         "Пункты" => "Points",
         "Перемещать часы" => "Move clock",
+        "Перемещать виджет" => "Move widget",
         "Меняет положение по кругу" => "Cycles through positions",
         "Интервал перемещения" => "Move interval",
         "Секунды" => "Seconds",
@@ -327,8 +398,8 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Да ({clock_format}, {clock_position}, {clock_size}пт)" => {
             "Yes ({clock_format}, {clock_position}, {clock_size}pt)"
         }
-        "Профиль: {profile_name} • Режим: {mode_text}{slideshow_suffix} • Таймер: {inactivity}с • Задержка мыши: {mouse_delay_ms}мс • Без звука: {mute}{volume_suffix} • Сон: {inhibit} • Интеграция питания: {power_integration} • Блокировка: {lock_screen} • Часы: {clock} • Fade: {fade} • ГК: {start_hotkey}/{stop_hotkey}" => {
-            "Profile: {profile_name} • Mode: {mode_text}{slideshow_suffix} • Timer: {inactivity}s • Mouse delay: {mouse_delay_ms}ms • Mute: {mute}{volume_suffix} • Sleep: {inhibit} • Power integration: {power_integration} • Lock screen: {lock_screen} • Clock: {clock} • Fade: {fade} • Hotkeys: {start_hotkey}/{stop_hotkey}"
+        "Профиль: {profile_name} • Режим: {mode_text}{slideshow_suffix} • Таймер: {inactivity}с • Задержка мыши: {mouse_delay_ms}мс • Без звука: {mute}{volume_suffix} • Сон: {inhibit} • Интеграция питания: {power_integration} • Блокировка: {lock_screen} • Часы: {clock} • Fade: {fade} • ГК: {start_hotkey}/{stop_hotkey}/{panic_hotkey}" => {
+            "Profile: {profile_name} • Mode: {mode_text}{slideshow_suffix} • Timer: {inactivity}s • Mouse delay: {mouse_delay_ms}ms • Mute: {mute}{volume_suffix} • Sleep: {inhibit} • Power integration: {power_integration} • Lock screen: {lock_screen} • Clock: {clock} • Fade: {fade} • Hotkeys: {start_hotkey}/{stop_hotkey}/{panic_hotkey}"
         }
         "Неизвестно" => "Unknown",
         "Некорректный формат" => "Invalid format",
@@ -343,6 +414,7 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Название" => "Name",
         "Команда скрытия" => "Hide command",
         "Команда показа" => "Show command",
+        "ОК" => "OK",
         "Формат не определён" => "Format not determined",
         "Файл не является корректным изображением" => "File is not a valid image",
         "Разрешение: {resolution_text} • Размер: {size_text}" => {

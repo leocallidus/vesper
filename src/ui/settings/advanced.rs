@@ -1,10 +1,10 @@
+use crate::config::{ActivationLogEntry, Config};
+use crate::i18n::{tr, Language};
+use glib::DateTime;
 use gtk4::prelude::*;
 use gtk4::{Button, ListBox, SelectionMode};
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use crate::config::{Config, ActivationLogEntry};
-use crate::i18n::{Language, tr};
-use glib::DateTime;
 
 pub struct AdvancedWidgets {
     pub panel_commands_group: adw::PreferencesGroup,
@@ -30,7 +30,10 @@ pub fn build_advanced_groups(config: &Config, lang: Language) -> AdvancedWidgets
     // Group 4: Panel commands
     let panel_commands_group = adw::PreferencesGroup::builder()
         .title(tr(lang, "Команды панелей"))
-        .description(tr(lang, "Команды для скрытия/показа панелей при активации скринсейвера"))
+        .description(tr(
+            lang,
+            "Команды для скрытия/показа панелей при активации скринсейвера",
+        ))
         .build();
 
     let panel_commands_list = gtk4::ListBox::new();
@@ -43,7 +46,7 @@ pub fn build_advanced_groups(config: &Config, lang: Language) -> AdvancedWidgets
     let add_command_btn = Button::with_label(tr(lang, "Добавить"));
     add_command_row.add_suffix(&add_command_btn);
     panel_commands_group.add(&add_command_row);
-    
+
     // Group 5: Status
     let status_group = adw::PreferencesGroup::builder()
         .title(tr(lang, "Статус"))
@@ -55,7 +58,7 @@ pub fn build_advanced_groups(config: &Config, lang: Language) -> AdvancedWidgets
         .use_markup(false)
         .build();
     status_group.add(&status_row);
-    
+
     let runtime_row = adw::ActionRow::builder()
         .title(tr(lang, "Общее время работы"))
         .subtitle(format_runtime(config.total_runtime_seconds, lang))
@@ -69,7 +72,12 @@ pub fn build_advanced_groups(config: &Config, lang: Language) -> AdvancedWidgets
     activation_list.add_css_class("boxed-list");
     activation_list.set_selection_mode(SelectionMode::None);
     activation_group.add(&activation_list);
-    populate_activation_log_group(&activation_group, &activation_list, &config.activation_log, lang);
+    populate_activation_log_group(
+        &activation_group,
+        &activation_list,
+        &config.activation_log,
+        lang,
+    );
     status_group.add(&activation_group);
 
     let clear_log_row = adw::ActionRow::builder()
@@ -117,7 +125,7 @@ pub fn build_advanced_groups(config: &Config, lang: Language) -> AdvancedWidgets
         .title(tr(lang, "О программе"))
         .build();
     let about_row = adw::ActionRow::builder()
-        .title("RS Screensaver")
+        .title("Vesper")
         .subtitle(tr(lang, "Простой скринсейвер сделанный на Rust и GTK4"))
         .build();
     let about_button = Button::with_label(tr(lang, "Открыть"));
@@ -218,7 +226,11 @@ pub fn populate_activation_log_group(
     for entry in entries.iter().rev().take(MAX_ACTIVATION_LOG_ROWS) {
         let title = format_activation_timestamp(entry.timestamp);
         let profile_name = entry.profile_name.trim();
-        let profile_name = if profile_name.is_empty() { "—" } else { profile_name };
+        let profile_name = if profile_name.is_empty() {
+            "—"
+        } else {
+            profile_name
+        };
         let mode = entry.mode.trim();
         let mode = if mode.is_empty() { "—" } else { mode };
         let subtitle = format!("{profile_name} • {mode}");

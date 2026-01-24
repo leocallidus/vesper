@@ -1,4 +1,4 @@
-# RS Screensaver
+# Vesper
 
 [English](README.md) | [Русский](README_ru.md)
 
@@ -57,7 +57,7 @@ cargo build --release
 cargo run --release
 
 # Or direct binary
-./target/release/rs-screensaver
+./target/release/vesper
 ```
 
 ## AppImage
@@ -68,24 +68,24 @@ Requires `appimagetool` on your system.
 bash scripts/build_appimage.sh
 ```
 
-The AppImage will be created at `dist/rs-screensaver-<arch>.AppImage`.
+The AppImage will be created at `dist/vesper-<arch>.AppImage`.
 
 ## CLI control (D-Bus)
 
 ```bash
-./target/release/rs-screensaver status
-./target/release/rs-screensaver start
-./target/release/rs-screensaver stop
-./target/release/rs-screensaver show-settings
-./target/release/rs-screensaver show
-./target/release/rs-screensaver enable
-./target/release/rs-screensaver disable
-./target/release/rs-screensaver inhibit
-./target/release/rs-screensaver uninhibit
-./target/release/rs-screensaver set-enabled true
-./target/release/rs-screensaver set-inhibit false
-./target/release/rs-screensaver switch-profile 2
-./target/release/rs-screensaver quit
+./target/release/vesper status
+./target/release/vesper start
+./target/release/vesper stop
+./target/release/vesper show-settings
+./target/release/vesper show
+./target/release/vesper enable
+./target/release/vesper disable
+./target/release/vesper inhibit
+./target/release/vesper uninhibit
+./target/release/vesper set-enabled true
+./target/release/vesper set-inhibit false
+./target/release/vesper switch-profile 2
+./target/release/vesper quit
 ```
 
 ## System tray menu
@@ -102,7 +102,7 @@ The AppImage will be created at `dist/rs-screensaver-<arch>.AppImage`.
 
 ## Configuration
 
-- Config path: `~/.config/rs-screensaver/config.json`
+- Config path: `~/.config/vesper/config.json`
 - Profiles and mode-specific settings are stored per profile
 
 ## Architecture

@@ -1,7 +1,39 @@
 use std::fs;
 use std::path::PathBuf;
 
-const AUTOSTART_FILE_NAME: &str = "com.example.rs-screensaver.desktop";
+const AUTOSTART_FILE_NAME: &str = "com.example.vesper.desktop";
+
+pub fn migrate_legacy_autostart() {
+    let Some(config_dir) = config_dir() else {
+        return;
+    };
+    let autostart_dir = config_dir.join("autostart");
+    if !autostart_dir.is_dir() {
+        return;
+    }
+
+    let legacy_names = ["rs-screensaver.desktop", "com.example.RSScreensaver.desktop"];
+    let mut migrated = false;
+
+    for name in legacy_names {
+        let legacy_path = autostart_dir.join(name);
+        if legacy_path.exists() {
+            eprintln!("Removing legacy autostart file: {:?}", legacy_path);
+            if let Err(e) = fs::remove_file(&legacy_path) {
+                eprintln!("Failed to remove legacy autostart file: {}", e);
+            } else {
+                migrated = true;
+            }
+        }
+    }
+
+    if migrated {
+        eprintln!("Migrating autostart to Vesper...");
+        if let Err(e) = set_autostart_enabled(true) {
+            eprintln!("Failed to enable Vesper autostart during migration: {}", e);
+        }
+    }
+}
 
 pub fn is_autostart_enabled() -> bool {
     autostart_file_path()
@@ -12,7 +44,9 @@ pub fn is_autostart_enabled() -> bool {
 pub fn set_autostart_enabled(enable: bool) -> Result<(), String> {
     let path = autostart_file_path().ok_or_else(|| "Autostart path not available".to_string())?;
     if enable {
-        let dir = path.parent().ok_or_else(|| "Autostart dir not available".to_string())?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| "Autostart dir not available".to_string())?;
         fs::create_dir_all(dir).map_err(|err| err.to_string())?;
         let exec = current_exec().map_err(|err| err.to_string())?;
         let content = desktop_entry_content(&exec);
@@ -76,7 +110,7 @@ fn format_exec(exec: String) -> String {
 
 fn desktop_entry_content(exec: &ExecPaths) -> String {
     format!(
-        "[Desktop Entry]\nType=Application\nName=RS Screensaver\nComment=Rust Screensaver Application\nExec={}\nTryExec={}\nIcon=rs-screensaver\nTerminal=false\nStartupWMClass=rs-screensaver\nCategories=Utility;\nStartupNotify=false\nX-GNOME-Autostart-enabled=true\nX-AppImage-Integrate=true\n",
+        "[Desktop Entry]\nType=Application\nName=Vesper\nComment=Rust Screensaver Application\nExec={}\nTryExec={}\nIcon=vesper\nTerminal=false\nStartupWMClass=vesper\nCategories=Utility;\nStartupNotify=false\nX-GNOME-Autostart-enabled=true\nX-AppImage-Integrate=true\n",
         exec.exec, exec.try_exec
     )
 }

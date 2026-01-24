@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=RS Screensaver
+Name=Vesper
 Comment=Rust Screensaver Application
-Exec=rs-screensaver
-TryExec=rs-screensaver
-Icon=rs-screensaver
+Exec=vesper
+TryExec=vesper
+Icon=vesper
 Terminal=false
 Categories=Utility;
 StartupNotify=false

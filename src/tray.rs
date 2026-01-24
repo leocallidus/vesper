@@ -1,9 +1,9 @@
-use ksni::{Tray, MenuItem};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
-use crate::AppMessage;
 use crate::config::Config;
 use crate::i18n::{resolve_language, tr};
+use crate::AppMessage;
+use ksni::{MenuItem, Tray};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 pub struct TrayHandler {
     sender: Sender<AppMessage>,
@@ -12,16 +12,31 @@ pub struct TrayHandler {
 }
 
 impl TrayHandler {
-    pub fn new(sender: Sender<AppMessage>, is_enabled: Arc<Mutex<bool>>, inhibit_sleep: Arc<Mutex<bool>>) -> Self {
-        Self { sender, is_enabled, inhibit_sleep }
+    pub fn new(
+        sender: Sender<AppMessage>,
+        is_enabled: Arc<Mutex<bool>>,
+        inhibit_sleep: Arc<Mutex<bool>>,
+    ) -> Self {
+        Self {
+            sender,
+            is_enabled,
+            inhibit_sleep,
+        }
     }
 }
 
 impl Tray for TrayHandler {
     fn icon_name(&self) -> String {
-        "preferences-desktop-screensaver".into()
+        "vesper".into()
     }
-    
+
+    fn icon_theme_path(&self) -> String {
+        use crate::ui::get_local_icon_theme_path;
+        get_local_icon_theme_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
     fn overlay_icon_name(&self) -> String {
         if *self.is_enabled.lock().unwrap() {
             String::new()
@@ -31,11 +46,11 @@ impl Tray for TrayHandler {
     }
 
     fn title(&self) -> String {
-        "RS Screensaver".into()
+        "Vesper".into()
     }
 
     fn id(&self) -> String {
-        "rs-screensaver".into()
+        "vesper".into()
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
@@ -44,7 +59,7 @@ impl Tray for TrayHandler {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         use ksni::menu::*;
-        
+
         let is_enabled = *self.is_enabled.lock().unwrap();
         let inhibit_sleep = *self.inhibit_sleep.lock().unwrap();
         let config = Config::load();

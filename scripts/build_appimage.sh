@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="rs-screensaver"
+APP_NAME="vesper"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPDIR="${ROOT_DIR}/dist/AppDir"
 OUT_DIR="${ROOT_DIR}/dist"
@@ -26,7 +26,7 @@ cat > "${APPDIR}/AppRun" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
-exec "${HERE}/usr/bin/rs-screensaver" "$@"
+exec "${HERE}/usr/bin/vesper" "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
 

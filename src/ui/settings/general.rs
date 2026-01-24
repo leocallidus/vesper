@@ -1,9 +1,9 @@
+use crate::config::Config;
+use crate::i18n::{language_index, language_label, tr, Language};
 use gtk4::prelude::*;
-use gtk4::{Align, SpinButton, Switch, Entry};
+use gtk4::{Align, Entry, SpinButton, Switch};
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use crate::config::Config;
-use crate::i18n::{Language, tr, language_label, language_index};
 
 pub struct GeneralWidgets {
     pub general_group: adw::PreferencesGroup,
@@ -14,6 +14,7 @@ pub struct GeneralWidgets {
     pub language_row: adw::ComboRow,
     pub start_hotkey_entry: Entry,
     pub stop_hotkey_entry: Entry,
+    pub panic_hotkey_entry: Entry,
 }
 
 pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
@@ -26,7 +27,7 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
         .title(tr(lang, "Интервал неактивности"))
         .subtitle(tr(lang, "Время бездействия в секундах"))
         .build();
-        
+
     let inactivity_spin = SpinButton::with_range(10.0, 3600.0, 10.0);
     inactivity_spin.set_value(config.active_profile().inactivity_seconds as f64);
     inactivity_spin.set_valign(Align::Center);
@@ -70,7 +71,10 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
     // Group 1.5: Hotkeys
     let hotkeys_group = adw::PreferencesGroup::builder()
         .title(tr(lang, "Горячие клавиши"))
-        .description(tr(lang, "Работают при активном окне приложения. Backspace — очистить"))
+        .description(tr(
+            lang,
+            "Работают при активном окне приложения. Backspace — очистить",
+        ))
         .build();
 
     let start_hotkey_row = adw::ActionRow::builder()
@@ -99,8 +103,23 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
     stop_hotkey_row.add_suffix(&stop_hotkey_entry);
     stop_hotkey_row.set_activatable_widget(Some(&stop_hotkey_entry));
 
+    let panic_hotkey_row = adw::ActionRow::builder()
+        .title(tr(lang, "Принудительное закрытие"))
+        .subtitle(tr(lang, "На случай зависания/ошибок GPU"))
+        .build();
+    let panic_hotkey_entry = Entry::new();
+    panic_hotkey_entry.set_hexpand(true);
+    panic_hotkey_entry.set_valign(Align::Center);
+    panic_hotkey_entry.set_editable(false);
+    panic_hotkey_entry.set_can_focus(true);
+    panic_hotkey_entry.set_placeholder_text(Some(tr(lang, "Нажмите комбинацию")));
+    panic_hotkey_entry.set_text(&config.hotkey_panic);
+    panic_hotkey_row.add_suffix(&panic_hotkey_entry);
+    panic_hotkey_row.set_activatable_widget(Some(&panic_hotkey_entry));
+
     hotkeys_group.add(&start_hotkey_row);
     hotkeys_group.add(&stop_hotkey_row);
+    hotkeys_group.add(&panic_hotkey_row);
 
     GeneralWidgets {
         general_group,
@@ -111,5 +130,6 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
         language_row,
         start_hotkey_entry,
         stop_hotkey_entry,
+        panic_hotkey_entry,
     }
 }

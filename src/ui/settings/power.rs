@@ -1,10 +1,10 @@
+use crate::config::Config;
+use crate::desktop;
+use crate::i18n::{tr, Language};
 use gtk4::prelude::*;
 use gtk4::{Align, Button, ListBox, Switch};
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use crate::config::Config;
-use crate::desktop;
-use crate::i18n::{Language, tr};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -32,13 +32,13 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
         .title(tr(lang, "Блокировать спящий режим"))
         .subtitle(tr(lang, "Предотвращает переход системы в сон"))
         .build();
-        
+
     let inhibit_switch = Switch::builder()
         .valign(Align::Center)
         .active(config.active_profile().inhibit_sleep)
         .build();
     inhibit_row.add_suffix(&inhibit_switch);
-    
+
     power_group.add(&inhibit_row);
 
     let power_integration_switch = Switch::builder()
@@ -48,7 +48,10 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
     if show_desktop_integrations {
         let power_integration_row = adw::ActionRow::builder()
             .title(tr(lang, "Интеграция с настройками питания"))
-            .subtitle(tr(lang, "KDE/GNOME: управление энергосбережением при скринсейвере"))
+            .subtitle(tr(
+                lang,
+                "KDE/GNOME: управление энергосбережением при скринсейвере",
+            ))
             .build();
         power_integration_row.add_suffix(&power_integration_switch);
         power_group.add(&power_integration_row);
@@ -61,7 +64,10 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
     if show_desktop_integrations {
         let lock_screen_row = adw::ActionRow::builder()
             .title(tr(lang, "Блокировать экран при активации"))
-            .subtitle(tr(lang, "KDE/GNOME: интеграция с системным экраном блокировки"))
+            .subtitle(tr(
+                lang,
+                "KDE/GNOME: интеграция с системным экраном блокировки",
+            ))
             .build();
         lock_screen_row.add_suffix(&lock_screen_switch);
         power_group.add(&lock_screen_row);
@@ -69,7 +75,10 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
 
     let mpris_pause_row = adw::ActionRow::builder()
         .title(tr(lang, "Приостанавливать медиаплееры (MPRIS)"))
-        .subtitle(tr(lang, "Останавливает воспроизведение при запуске скринсейвера"))
+        .subtitle(tr(
+            lang,
+            "Останавливает воспроизведение при запуске скринсейвера",
+        ))
         .build();
     let mpris_pause_switch = Switch::builder()
         .valign(Align::Center)

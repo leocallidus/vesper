@@ -1,9 +1,9 @@
+use crate::autostart;
+use crate::config::Config;
+use crate::i18n::{tr, Language};
 use gtk4::{Align, Switch};
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use crate::autostart;
-use crate::config::Config;
-use crate::i18n::{Language, tr};
 
 pub struct AutostartWidgets {
     pub group: adw::PreferencesGroup,

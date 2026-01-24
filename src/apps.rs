@@ -1,11 +1,11 @@
+use gio::prelude::*;
+use gio::DesktopAppInfo;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 use x11rb::rust_connection::RustConnection;
-use gio::prelude::*;
-use gio::DesktopAppInfo;
 
 #[derive(Clone, Debug)]
 pub struct RunningGuiApp {
@@ -66,7 +66,11 @@ pub fn list_running_gui_apps() -> Vec<RunningGuiApp> {
         add_app_by_id(&mut apps, &name);
     }
     let mut list: Vec<RunningGuiApp> = apps.into_values().collect();
-    list.sort_by(|a, b| a.display_name.to_ascii_lowercase().cmp(&b.display_name.to_ascii_lowercase()));
+    list.sort_by(|a, b| {
+        a.display_name
+            .to_ascii_lowercase()
+            .cmp(&b.display_name.to_ascii_lowercase())
+    });
     list
 }
 
@@ -114,7 +118,14 @@ fn x11_window_pids() -> Option<HashSet<u32>> {
     let net_client_list = intern_atom(&conn, b"_NET_CLIENT_LIST")?;
     let net_wm_pid = intern_atom(&conn, b"_NET_WM_PID")?;
     let reply = conn
-        .get_property(false, screen.root, net_client_list, AtomEnum::WINDOW, 0, u32::MAX)
+        .get_property(
+            false,
+            screen.root,
+            net_client_list,
+            AtomEnum::WINDOW,
+            0,
+            u32::MAX,
+        )
         .ok()?
         .reply()
         .ok()?;
@@ -136,7 +147,11 @@ fn x11_window_pids() -> Option<HashSet<u32>> {
 }
 
 fn intern_atom(conn: &RustConnection, name: &[u8]) -> Option<u32> {
-    conn.intern_atom(false, name).ok()?.reply().ok().map(|r| r.atom)
+    conn.intern_atom(false, name)
+        .ok()?
+        .reply()
+        .ok()
+        .map(|r| r.atom)
 }
 
 fn x11_socket_pids() -> Option<HashSet<u32>> {
@@ -458,7 +473,8 @@ fn add_app_by_id(apps: &mut HashMap<String, RunningGuiApp>, id: &str) {
 
 fn app_entry_from_env(env_text: &str) -> Option<RunningGuiApp> {
     if let Some(desktop_id) = desktop_id_from_env(env_text) {
-        return app_entry_from_desktop_id(&desktop_id).or_else(|| entry_from_id_fallback(&desktop_id));
+        return app_entry_from_desktop_id(&desktop_id)
+            .or_else(|| entry_from_id_fallback(&desktop_id));
     }
     if let Some(app_id) = app_id_from_env(env_text) {
         return resolve_app_info(&app_id).or_else(|| entry_from_id_fallback(&app_id));
