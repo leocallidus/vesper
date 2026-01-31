@@ -12,6 +12,7 @@ rm -rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin"
 mkdir -p "${APPDIR}/usr/share/applications"
 mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
+mkdir -p "${APPDIR}/usr/share/icons/hicolor/128x128/apps"
 
 echo "Building release..."
 cargo build --release
@@ -21,6 +22,32 @@ cp "${ROOT_DIR}/packaging/appimage/${APP_NAME}.desktop" "${APPDIR}/usr/share/app
 cp "${ROOT_DIR}/packaging/appimage/${APP_NAME}.svg" "${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_NAME}.svg"
 cp "${ROOT_DIR}/packaging/appimage/${APP_NAME}.desktop" "${APPDIR}/${APP_NAME}.desktop"
 cp "${ROOT_DIR}/packaging/appimage/${APP_NAME}.svg" "${APPDIR}/${APP_NAME}.svg"
+
+# Ensure icon theme is discoverable (needed for some trays)
+cat > "${APPDIR}/usr/share/icons/hicolor/index.theme" << 'EOF'
+[Icon Theme]
+Name=Hicolor
+Comment=Default Theme
+Directories=128x128/apps,scalable/apps
+
+[128x128/apps]
+Size=128
+Type=Fixed
+Context=Applications
+
+[scalable/apps]
+Size=128
+Type=Scalable
+MinSize=1
+MaxSize=256
+Context=Applications
+EOF
+
+# Optional: rasterize SVG to PNG for trays that don't support SVG icons
+if command -v rsvg-convert >/dev/null 2>&1; then
+  rsvg-convert -w 128 -h 128 -o "${APPDIR}/usr/share/icons/hicolor/128x128/apps/${APP_NAME}.png" \
+    "${ROOT_DIR}/packaging/appimage/${APP_NAME}.svg" || true
+fi
 
 cat > "${APPDIR}/AppRun" << 'EOF'
 #!/usr/bin/env bash

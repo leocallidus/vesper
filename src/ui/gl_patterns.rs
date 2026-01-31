@@ -254,10 +254,8 @@ pub fn build_gl_pattern_area(
             };
 
             let scale = area.scale_factor().max(1) as i32;
-            #[allow(deprecated)]
-            let fb_width = (area.allocated_width() * scale).max(1);
-            #[allow(deprecated)]
-            let fb_height = (area.allocated_height() * scale).max(1);
+            let fb_width = (area.width().max(1) * scale).max(1);
+            let fb_height = (area.height().max(1) * scale).max(1);
 
             let t = start.elapsed().as_secs_f32() * params.speed_mult;
             let (mouse_x, mouse_y) = mouse_pos

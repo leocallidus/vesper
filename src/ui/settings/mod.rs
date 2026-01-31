@@ -11,7 +11,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ColorDialogButton, ContentFit, Entry, EventControllerKey, Frame,
     IconLookupFlags, IconTheme, Label, ListBox, Picture, SelectionMode, SpinButton, Stack, Switch,
-    TextDirection,
+    TextDirection, EntryIconPosition,
 };
 use image::GenericImageView;
 use libadwaita as adw;
@@ -27,6 +27,7 @@ pub mod autostart;
 pub mod content;
 pub mod general;
 pub mod power;
+pub mod shaderpacks;
 
 use advanced::*;
 use appearance::*;
@@ -34,6 +35,7 @@ use autostart::*;
 use content::*;
 use general::*;
 use power::*;
+use shaderpacks::*;
 
 pub struct SettingsWindow {
     window: adw::Window,
@@ -49,6 +51,7 @@ struct SettingsUiRefs {
     fade_switch: Switch,
     language_row: adw::ComboRow,
     start_minimized_switch: Switch,
+    tray_icon_switch: Switch,
     start_hotkey_entry: Entry,
     stop_hotkey_entry: Entry,
     panic_hotkey_entry: Entry,
@@ -63,20 +66,34 @@ struct SettingsUiRefs {
     pattern_density_row: adw::ComboRow,
     pattern_theme_row: adw::ComboRow,
     water_ripples_bg_row: adw::ActionRow,
-    water_ripples_bg_button: gtk4::Button,
+    _water_ripples_bg_button: gtk4::Button,
     water_ripples_bg_clear_button: gtk4::Button,
     web_url_row: adw::EntryRow,
     web_interaction_switch: Switch,
     stream_url_row: adw::EntryRow,
+    shadertoy_source_row: adw::ComboRow,
+    _shadertoy_source_model: gtk4::StringList,
+    shadertoy_pack_row: adw::ComboRow,
+    shadertoy_pack_model: gtk4::StringList,
+    shadertoy_shader_row: adw::ComboRow,
+    shadertoy_shader_model: gtk4::StringList,
+    shadertoy_packs: Rc<RefCell<Vec<crate::shaderpacks::Shaderpack>>>,
+    shadertoy_manual_path: Rc<RefCell<Option<String>>>,
     file_row: adw::ActionRow,
     file_info_row: adw::ActionRow,
-    shader_check_row: adw::ActionRow,
-    slideshow_interval_row: adw::ActionRow,
-    mute_row: adw::ActionRow,
-    volume_row: adw::ActionRow,
+	shader_check_row: adw::ActionRow,
+	shadertoy_interaction_row: adw::ActionRow,
+	shadertoy_interaction_switch: Switch,
+	shadertoy_hide_cursor_row: adw::ActionRow,
+	shadertoy_hide_cursor_switch: Switch,
+	shadertoy_sound_row: adw::ActionRow,
+	slideshow_interval_row: adw::ActionRow,
+	mute_row: adw::ActionRow,
+	volume_row: adw::ActionRow,
     random_row: adw::ActionRow,
     slideshow_interval_spin: SpinButton,
     mute_switch: Switch,
+    shadertoy_sound_switch: Switch,
     video_volume_spin: SpinButton,
     random_media_switch: Switch,
     media_files: Rc<RefCell<Vec<String>>>,
@@ -115,7 +132,7 @@ struct SettingsUiRefs {
     clock_preview_label: Label,
     inhibit_switch: Switch,
     power_integration_switch: Switch,
-    lock_screen_switch: Switch,
+    integrated_lock_screen_switch: Switch,
     mpris_pause_switch: Switch,
     app_inhibit_list: ListBox,
     app_inhibit_entry: adw::EntryRow,
@@ -168,6 +185,7 @@ impl SettingsController {
             hotkey_stop,
             hotkey_panic,
             start_minimized,
+            tray_icon_enabled,
             autostart_enabled,
             clamped,
             total_profiles,
@@ -185,6 +203,7 @@ impl SettingsController {
             let hotkey_stop = config.hotkey_stop.clone();
             let hotkey_panic = config.hotkey_panic.clone();
             let start_minimized = config.start_minimized;
+            let tray_icon_enabled = config.tray_icon_enabled;
             let autostart_enabled = crate::autostart::is_autostart_enabled();
             let total_profiles = config.profiles.len();
             (
@@ -194,6 +213,7 @@ impl SettingsController {
                 hotkey_stop,
                 hotkey_panic,
                 start_minimized,
+                tray_icon_enabled,
                 autostart_enabled,
                 clamped,
                 total_profiles,
@@ -211,29 +231,17 @@ impl SettingsController {
         self.ui.fade_switch.set_active(profile.fade_enabled);
         self.ui.language_row.set_selected(language_index(language));
         self.ui.start_minimized_switch.set_active(start_minimized);
+        self.ui.tray_icon_switch.set_active(tray_icon_enabled);
         self.ui.autostart_switch.set_active(autostart_enabled);
-        self.ui.start_hotkey_entry.set_text(&hotkey_start);
-        self.ui.stop_hotkey_entry.set_text(&hotkey_stop);
-        self.ui.panic_hotkey_entry.set_text(&hotkey_panic);
+	        set_hotkey_entry(&self.ui.start_hotkey_entry, &hotkey_start);
+	        set_hotkey_entry(&self.ui.stop_hotkey_entry, &hotkey_stop);
+	        set_hotkey_entry(&self.ui.panic_hotkey_entry, &hotkey_panic);
 
         let mode_idx = profile_mode_index(&profile.mode);
         if let Some(child) = self.ui.mode_selector.child_at_index(mode_idx as i32) {
             self.ui.mode_selector.select_child(&child);
         }
         set_stack_for_mode(&self.ui.stack, mode_idx);
-        set_content_mode_visibility(
-            &self.ui.stream_url_row,
-            &self.ui.file_row,
-            &self.ui.file_info_row,
-            &self.ui.shader_check_row,
-            &self.ui.slideshow_interval_row,
-            &self.ui.mute_row,
-            &self.ui.volume_row,
-            &self.ui.random_row,
-            &self.ui.media_list_row,
-            &self.ui.media_list_box,
-            mode_idx,
-        );
 
         match &profile.mode {
             ScreensaverMode::Color(hex) => {
@@ -373,6 +381,15 @@ impl SettingsController {
             ScreensaverMode::Shadertoy(path) => {
                 self.ui.web_url_row.set_text("");
                 self.ui.stream_url_row.set_text("");
+                {
+                    let trimmed = path.trim();
+                    *self.ui.shadertoy_manual_path.borrow_mut() = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
+                }
+
                 set_file_row_path(
                     &self.ui.file_row,
                     &self.ui.file_info_row,
@@ -380,8 +397,52 @@ impl SettingsController {
                     tr(self.lang, "Файл не выбран"),
                     self.lang,
                 );
+
+                // Best-effort: if the current path points into an installed shaderpack,
+                // switch the selector to Shaderpack and preselect the matching entry.
+                reload_shadertoy_packs_into_models(self);
+                let path = std::path::Path::new(path.trim());
+                if let Some((pack_idx, shader_idx, image_path)) =
+                    find_shadertoy_shaderpack_match_in_cache(self, path)
+                {
+                    self.ui.shadertoy_source_row.set_selected(1);
+                    self.ui.shadertoy_pack_row.set_selected(pack_idx as u32);
+                    rebuild_shadertoy_shader_model(self, pack_idx);
+                    self.ui.shadertoy_shader_row.set_selected(shader_idx as u32);
+                    if let Some(img) = image_path.map(|p| p.to_string_lossy().to_string()) {
+                        set_file_row_path(
+                            &self.ui.file_row,
+                            &self.ui.file_info_row,
+                            Some(&img),
+                            tr(self.lang, "Файл не выбран"),
+                            self.lang,
+                        );
+                    }
+                } else {
+                    self.ui.shadertoy_source_row.set_selected(0);
+                }
             }
         }
+
+        set_content_mode_visibility(
+            &self.ui.stream_url_row,
+            &self.ui.shadertoy_source_row,
+            &self.ui.shadertoy_pack_row,
+            &self.ui.shadertoy_shader_row,
+            &self.ui.file_row,
+            &self.ui.file_info_row,
+            &self.ui.shader_check_row,
+            &self.ui.shadertoy_interaction_row,
+            &self.ui.shadertoy_hide_cursor_row,
+            &self.ui.shadertoy_sound_row,
+            &self.ui.slideshow_interval_row,
+            &self.ui.mute_row,
+            &self.ui.volume_row,
+            &self.ui.random_row,
+            &self.ui.media_list_row,
+            &self.ui.media_list_box,
+            mode_idx,
+        );
 
         {
             let path = profile.water_ripples_background_image.trim();
@@ -418,6 +479,15 @@ impl SettingsController {
             .slideshow_interval_spin
             .set_value(profile.slideshow_interval_seconds as f64);
         self.ui.mute_switch.set_active(profile.mute_video);
+	        self.ui
+	            .shadertoy_interaction_switch
+	            .set_active(profile.shadertoy_interaction_enabled);
+	        self.ui
+	            .shadertoy_hide_cursor_switch
+	            .set_active(profile.shadertoy_hide_cursor);
+	        self.ui
+	            .shadertoy_sound_switch
+	            .set_active(profile.shadertoy_sound_enabled);
         self.ui
             .video_volume_spin
             .set_value(profile.video_volume as f64);
@@ -550,9 +620,12 @@ impl SettingsController {
         self.ui
             .power_integration_switch
             .set_active(profile.power_integration_enabled);
+        let lock_enabled = profile
+            .integrated_lock_screen_enabled
+            .unwrap_or(profile.lock_screen_enabled);
         self.ui
-            .lock_screen_switch
-            .set_active(profile.lock_screen_enabled);
+            .integrated_lock_screen_switch
+            .set_active(lock_enabled);
         self.ui
             .mpris_pause_switch
             .set_active(profile.mpris_pause_enabled);
@@ -592,13 +665,18 @@ impl SettingsController {
         profile.mouse_wake_delay_ms = self.ui.mouse_wake_spin.value() as u64;
         profile.fade_enabled = self.ui.fade_switch.is_active();
         profile.mute_video = self.ui.mute_switch.is_active();
+        profile.shadertoy_interaction_enabled = self.ui.shadertoy_interaction_switch.is_active();
+        profile.shadertoy_hide_cursor = self.ui.shadertoy_hide_cursor_switch.is_active();
+        profile.shadertoy_sound_enabled = self.ui.shadertoy_sound_switch.is_active();
         profile.video_volume = self.ui.video_volume_spin.value() as u8;
         profile.random_media = self.ui.random_media_switch.is_active();
         profile.media_list = self.ui.media_files.borrow().clone();
         profile.slideshow_interval_seconds = self.ui.slideshow_interval_spin.value() as u64;
         profile.inhibit_sleep = self.ui.inhibit_switch.is_active();
         profile.power_integration_enabled = self.ui.power_integration_switch.is_active();
-        profile.lock_screen_enabled = self.ui.lock_screen_switch.is_active();
+        let lock_enabled = self.ui.integrated_lock_screen_switch.is_active();
+        profile.lock_screen_enabled = lock_enabled;
+        profile.integrated_lock_screen_enabled = Some(lock_enabled);
         profile.mpris_pause_enabled = self.ui.mpris_pause_switch.is_active();
         profile.app_inhibit_list = normalized_app_list(&self.ui.app_inhibit_apps.borrow());
         profile.show_now_playing = self.ui.now_playing_switch.is_active();
@@ -682,10 +760,11 @@ impl SettingsController {
         };
 
         config.language = language_from_index(self.ui.language_row.selected());
+        config.tray_icon_enabled = self.ui.tray_icon_switch.is_active();
         config.start_minimized = self.ui.start_minimized_switch.is_active();
-        config.hotkey_start = self.ui.start_hotkey_entry.text().to_string();
-        config.hotkey_stop = self.ui.stop_hotkey_entry.text().to_string();
-        config.hotkey_panic = self.ui.panic_hotkey_entry.text().to_string();
+        config.hotkey_start = hotkey_entry_accel(&self.ui.start_hotkey_entry);
+        config.hotkey_stop = hotkey_entry_accel(&self.ui.stop_hotkey_entry);
+        config.hotkey_panic = hotkey_entry_accel(&self.ui.panic_hotkey_entry);
     }
 }
 
@@ -787,6 +866,12 @@ impl SettingsWindow {
         view_stack.add_titled(&autostart_page, Some("autostart"), tr(lang, "Автозапуск"));
         let content_page = adw::PreferencesPage::new();
         view_stack.add_titled(&content_page, Some("content"), tr(lang, "Контент"));
+        let shaderpacks_widgets = build_shaderpacks_page(lang);
+        view_stack.add_titled(
+            &shaderpacks_widgets.page,
+            Some("shaderpacks"),
+            tr(lang, "Шейдерпаки"),
+        );
         let appearance_page = adw::PreferencesPage::new();
         view_stack.add_titled(
             &appearance_page,
@@ -819,6 +904,7 @@ impl SettingsWindow {
         let AutostartWidgets {
             autostart_switch,
             start_minimized_switch,
+            tray_icon_switch,
             ..
         } = autostart_widgets;
 
@@ -841,12 +927,26 @@ impl SettingsWindow {
             web_url_row,
             web_interaction_switch,
             stream_url_row,
+            shadertoy_source_row,
+            shadertoy_source_model,
+            shadertoy_pack_row,
+            shadertoy_pack_model,
+            shadertoy_shader_row,
+            shadertoy_shader_model,
+            shadertoy_packs,
+            shadertoy_manual_path,
             file_row,
             file_button,
             file_info_row,
             shader_check_row,
-            shader_check_button,
-            slideshow_interval_row,
+	            shader_check_button,
+	            shadertoy_interaction_row,
+	            shadertoy_interaction_switch,
+	            shadertoy_hide_cursor_row,
+	            shadertoy_hide_cursor_switch,
+	            shadertoy_sound_row,
+	            shadertoy_sound_switch,
+	            slideshow_interval_row,
             mute_row,
             volume_row,
             random_row,
@@ -910,15 +1010,15 @@ impl SettingsWindow {
         let power_widgets = build_power_group(&config, lang);
         power_page.add(&power_widgets.group);
         power_page.add(&power_widgets.apps_group);
-        let PowerWidgets {
-            inhibit_switch,
-            power_integration_switch,
-            lock_screen_switch,
-            mpris_pause_switch,
-            app_inhibit_list,
-            app_inhibit_entry,
-            app_inhibit_add_button,
-            app_inhibit_refresh_button,
+	        let PowerWidgets {
+	            inhibit_switch,
+	            power_integration_switch,
+	            integrated_lock_screen_switch,
+	            mpris_pause_switch,
+	            app_inhibit_list,
+	            app_inhibit_entry,
+	            app_inhibit_add_button,
+	            app_inhibit_refresh_button,
             app_inhibit_apps,
             ..
         } = power_widgets;
@@ -1049,6 +1149,11 @@ impl SettingsWindow {
                 "applications-multimedia-symbolic",
             ),
             (
+                "shaderpacks",
+                tr(lang, "Шейдерпаки"),
+                "applications-graphics-symbolic",
+            ),
+            (
                 "appearance",
                 tr(lang, "Внешний вид"),
                 "preferences-desktop-appearance-symbolic",
@@ -1118,10 +1223,16 @@ impl SettingsWindow {
         mode_selector.connect_selected_children_changed({
             let stack = stack.clone();
             let stream_url_row = stream_url_row.clone();
+            let shadertoy_source_row = shadertoy_source_row.clone();
+            let shadertoy_pack_row = shadertoy_pack_row.clone();
+            let shadertoy_shader_row = shadertoy_shader_row.clone();
             let file_row = file_row.clone();
-            let file_info_row = file_info_row.clone();
-            let shader_check_row = shader_check_row.clone();
-            let slideshow_interval_row = slideshow_interval_row.clone();
+	            let file_info_row = file_info_row.clone();
+	            let shader_check_row = shader_check_row.clone();
+	            let shadertoy_interaction_row = shadertoy_interaction_row.clone();
+	            let shadertoy_hide_cursor_row = shadertoy_hide_cursor_row.clone();
+	            let shadertoy_sound_row = shadertoy_sound_row.clone();
+	            let slideshow_interval_row = slideshow_interval_row.clone();
             let mute_row = mute_row.clone();
             let volume_row = volume_row.clone();
             let random_row = random_row.clone();
@@ -1133,16 +1244,22 @@ impl SettingsWindow {
                 };
                 let mode_idx = unsafe { child.data::<u32>("mode-index").unwrap().as_ref().clone() };
                 set_stack_for_mode(&stack, mode_idx);
-                set_content_mode_visibility(
-                    &stream_url_row,
-                    &file_row,
-                    &file_info_row,
-                    &shader_check_row,
-                    &slideshow_interval_row,
-                    &mute_row,
-                    &volume_row,
-                    &random_row,
-                    &media_list_row,
+	                set_content_mode_visibility(
+	                    &stream_url_row,
+	                    &shadertoy_source_row,
+	                    &shadertoy_pack_row,
+	                    &shadertoy_shader_row,
+	                    &file_row,
+	                    &file_info_row,
+	                    &shader_check_row,
+	                    &shadertoy_interaction_row,
+	                    &shadertoy_hide_cursor_row,
+	                    &shadertoy_sound_row,
+	                    &slideshow_interval_row,
+	                    &mute_row,
+	                    &volume_row,
+	                    &random_row,
+	                    &media_list_row,
                     &media_list_box,
                     mode_idx,
                 );
@@ -1169,15 +1286,15 @@ impl SettingsWindow {
             let file_info_row = file_info_row.clone();
             let mute_switch = mute_switch.clone();
             let video_volume_spin = video_volume_spin.clone();
-            let fade_switch = fade_switch.clone();
-            let inhibit_switch = inhibit_switch.clone();
-            let power_integration_switch = power_integration_switch.clone();
-            let lock_screen_switch = lock_screen_switch.clone();
-            let clock_switch = clock_switch.clone();
-            let clock_two_lines_switch = clock_two_lines_switch.clone();
-            let clock_format_entry = clock_format_entry.clone();
-            let clock_time_format_entry = clock_time_format_entry.clone();
-            let clock_date_format_entry = clock_date_format_entry.clone();
+	            let fade_switch = fade_switch.clone();
+	            let inhibit_switch = inhibit_switch.clone();
+	            let power_integration_switch = power_integration_switch.clone();
+	            let integrated_lock_screen_switch = integrated_lock_screen_switch.clone();
+	            let clock_switch = clock_switch.clone();
+	            let clock_two_lines_switch = clock_two_lines_switch.clone();
+	            let clock_format_entry = clock_format_entry.clone();
+	            let clock_time_format_entry = clock_time_format_entry.clone();
+	            let clock_date_format_entry = clock_date_format_entry.clone();
             let clock_position_row = clock_position_row.clone();
             let clock_move_switch = clock_move_switch.clone();
             let clock_move_interval_spin = clock_move_interval_spin.clone();
@@ -1193,7 +1310,7 @@ impl SettingsWindow {
                 let mode_idx = selected_child
                     .map(|c| unsafe { c.data::<u32>("mode-index").unwrap().as_ref().clone() })
                     .unwrap_or(0);
-                let text = build_status_text(
+	                let text = build_status_text(
                     &profile_name_row,
                     &inactivity_spin,
                     &mouse_wake_spin,
@@ -1208,13 +1325,13 @@ impl SettingsWindow {
                     &file_info_row,
                     &mute_switch,
                     &video_volume_spin,
-                    &fade_switch,
-                    &inhibit_switch,
-                    &power_integration_switch,
-                    &lock_screen_switch,
-                    &clock_switch,
-                    &clock_two_lines_switch,
-                    &clock_format_entry,
+	                    &fade_switch,
+	                    &inhibit_switch,
+	                    &power_integration_switch,
+	                    &integrated_lock_screen_switch,
+	                    &clock_switch,
+	                    &clock_two_lines_switch,
+	                    &clock_format_entry,
                     &clock_time_format_entry,
                     &clock_date_format_entry,
                     &clock_position_row,
@@ -1241,6 +1358,10 @@ impl SettingsWindow {
             let preview_frame = preview_frame.clone();
             let mode_selector = mode_selector.clone();
             let file_row = file_row.clone();
+            let shadertoy_source_row = shadertoy_source_row.clone();
+            let shadertoy_pack_row = shadertoy_pack_row.clone();
+            let shadertoy_shader_row = shadertoy_shader_row.clone();
+            let shadertoy_packs = shadertoy_packs.clone();
             let random_media_switch = random_media_switch.clone();
             let media_files = media_files.clone();
             let selected_media_preview = selected_media_preview.clone();
@@ -1251,14 +1372,15 @@ impl SettingsWindow {
             let pattern_speed_row = pattern_speed_row.clone();
             let pattern_density_row = pattern_density_row.clone();
             let pattern_theme_row = pattern_theme_row.clone();
-            let web_url_row = web_url_row.clone();
-            let stream_url_row = stream_url_row.clone();
-            let mute_switch = mute_switch.clone();
-            let video_volume_spin = video_volume_spin.clone();
-            let clock_switch = clock_switch.clone();
-            let clock_format_row = clock_format_row.clone();
-            let clock_format_entry = clock_format_entry.clone();
-            let clock_time_format_entry = clock_time_format_entry.clone();
+	            let web_url_row = web_url_row.clone();
+	            let stream_url_row = stream_url_row.clone();
+	            let mute_switch = mute_switch.clone();
+	            let shadertoy_interaction_switch = shadertoy_interaction_switch.clone();
+	            let video_volume_spin = video_volume_spin.clone();
+	            let clock_switch = clock_switch.clone();
+	            let clock_format_row = clock_format_row.clone();
+	            let clock_format_entry = clock_format_entry.clone();
+	            let clock_time_format_entry = clock_time_format_entry.clone();
             let clock_date_format_entry = clock_date_format_entry.clone();
             let clock_two_lines_switch = clock_two_lines_switch.clone();
             let clock_position_row = clock_position_row.clone();
@@ -1289,6 +1411,16 @@ impl SettingsWindow {
                     &media_files.borrow(),
                     selected_media_preview.borrow().as_deref(),
                 );
+                let shadertoy_preview_png = if mode == 9 && shadertoy_source_row.selected() == 1 {
+                    let pack_idx = shadertoy_pack_row.selected() as usize;
+                    let shader_idx = shadertoy_shader_row.selected() as usize;
+                    let packs = shadertoy_packs.borrow();
+                    packs.get(pack_idx)
+                        .and_then(|p| p.shaders.get(shader_idx))
+                        .and_then(|s| s.preview_path.clone())
+                } else {
+                    None
+                };
                 let water_ripples_bg_path =
                     crate::ui::settings::content::file_row_path(&water_ripples_bg_row);
                 let clock_format = clock_format_from_ui(&clock_format_row, &clock_format_entry);
@@ -1305,15 +1437,17 @@ impl SettingsWindow {
                     &web_url_row,
                     &stream_url_row,
                     &file_row,
-                    &mute_switch,
-                    video_volume_spin.value() as u8,
-                    preview_pause_switch.is_active(),
-                    preview_path.as_deref(),
-                    clock_switch.is_active(),
-                    clock_two_lines_switch.is_active(),
-                    &clock_format,
-                    &clock_time_format_entry.text(),
-                    &clock_date_format_entry.text(),
+	                    &mute_switch,
+	                    video_volume_spin.value() as u8,
+	                    preview_pause_switch.is_active(),
+	                    preview_path.as_deref(),
+	                    shadertoy_preview_png.as_deref(),
+	                    shadertoy_interaction_switch.is_active(),
+	                    clock_switch.is_active(),
+	                    clock_two_lines_switch.is_active(),
+	                    &clock_format,
+	                    &clock_time_format_entry.text(),
+	                    &clock_date_format_entry.text(),
                     appearance::clock_position_from_index(clock_position_row.selected()),
                     clock_size_spin.value() as u32,
                     lang,
@@ -1349,7 +1483,7 @@ impl SettingsWindow {
             profile_update_guard: profile_update_guard.clone(),
             lang,
             window_weak: window.downgrade(),
-            ui: SettingsUiRefs {
+                ui: SettingsUiRefs {
                 save_button: save_button.clone(),
                 profile_dropdown: profile_dropdown.clone(),
                 profile_model: profile_model.clone(),
@@ -1359,6 +1493,7 @@ impl SettingsWindow {
                 fade_switch: fade_switch.clone(),
                 language_row: language_row.clone(),
                 start_minimized_switch: start_minimized_switch.clone(),
+                tray_icon_switch: tray_icon_switch.clone(),
                 start_hotkey_entry: start_hotkey_entry.clone(),
                 stop_hotkey_entry: stop_hotkey_entry.clone(),
                 panic_hotkey_entry: panic_hotkey_entry.clone(),
@@ -1373,20 +1508,34 @@ impl SettingsWindow {
                 pattern_density_row: pattern_density_row.clone(),
                 pattern_theme_row: pattern_theme_row.clone(),
                 water_ripples_bg_row: water_ripples_bg_row.clone(),
-                water_ripples_bg_button: water_ripples_bg_button.clone(),
+                _water_ripples_bg_button: water_ripples_bg_button.clone(),
                 water_ripples_bg_clear_button: water_ripples_bg_clear_button.clone(),
                 web_url_row: web_url_row.clone(),
                 web_interaction_switch: web_interaction_switch.clone(),
                 stream_url_row: stream_url_row.clone(),
-                file_row: file_row.clone(),
-                file_info_row: file_info_row.clone(),
-                shader_check_row: shader_check_row.clone(),
-                slideshow_interval_row: slideshow_interval_row.clone(),
+                shadertoy_source_row: shadertoy_source_row.clone(),
+                _shadertoy_source_model: shadertoy_source_model.clone(),
+                shadertoy_pack_row: shadertoy_pack_row.clone(),
+                shadertoy_pack_model: shadertoy_pack_model.clone(),
+                shadertoy_shader_row: shadertoy_shader_row.clone(),
+                shadertoy_shader_model: shadertoy_shader_model.clone(),
+                shadertoy_packs: shadertoy_packs.clone(),
+                shadertoy_manual_path: shadertoy_manual_path.clone(),
+	                file_row: file_row.clone(),
+	                file_info_row: file_info_row.clone(),
+	                shader_check_row: shader_check_row.clone(),
+	                shadertoy_interaction_row: shadertoy_interaction_row.clone(),
+	                shadertoy_interaction_switch: shadertoy_interaction_switch.clone(),
+	                shadertoy_hide_cursor_row: shadertoy_hide_cursor_row.clone(),
+	                shadertoy_hide_cursor_switch: shadertoy_hide_cursor_switch.clone(),
+	                shadertoy_sound_row: shadertoy_sound_row.clone(),
+	                slideshow_interval_row: slideshow_interval_row.clone(),
                 mute_row: mute_row.clone(),
                 volume_row: volume_row.clone(),
                 random_row: random_row.clone(),
                 slideshow_interval_spin: slideshow_interval_spin.clone(),
                 mute_switch: mute_switch.clone(),
+                shadertoy_sound_switch: shadertoy_sound_switch.clone(),
                 video_volume_spin: video_volume_spin.clone(),
                 random_media_switch: random_media_switch.clone(),
                 media_files: media_files.clone(),
@@ -1423,13 +1572,13 @@ impl SettingsWindow {
                 clock_move_interval_spin: clock_move_interval_spin.clone(),
                 clock_size_spin: clock_size_spin.clone(),
                 clock_preview_label: clock_preview_label.clone(),
-                inhibit_switch: inhibit_switch.clone(),
-                power_integration_switch: power_integration_switch.clone(),
-                lock_screen_switch: lock_screen_switch.clone(),
-                mpris_pause_switch: mpris_pause_switch.clone(),
-                app_inhibit_list: app_inhibit_list.clone(),
-                app_inhibit_entry: app_inhibit_entry.clone(),
-                app_inhibit_apps: app_inhibit_apps.clone(),
+                    inhibit_switch: inhibit_switch.clone(),
+                    power_integration_switch: power_integration_switch.clone(),
+                    integrated_lock_screen_switch: integrated_lock_screen_switch.clone(),
+                    mpris_pause_switch: mpris_pause_switch.clone(),
+	                app_inhibit_list: app_inhibit_list.clone(),
+	                app_inhibit_entry: app_inhibit_entry.clone(),
+	                app_inhibit_apps: app_inhibit_apps.clone(),
                 delete_button: delete_button.clone(),
                 panel_commands_list: panel_commands_list.clone(),
                 monitor_profile_model: monitor_profile_model.clone(),
@@ -1438,6 +1587,8 @@ impl SettingsWindow {
             update_status: update_status.clone(),
             update_preview: update_preview.clone(),
         });
+
+        connect_shaderpacks(&shaderpacks_widgets, controller.clone(), toast_overlay.clone());
 
         for (monitor_id, row) in controller.ui.monitor_profile_rows.borrow().clone() {
             row.connect_notify_local(Some("selected"), {
@@ -1896,6 +2047,26 @@ impl SettingsWindow {
             }
         });
 
+        tray_icon_switch.connect_notify_local(Some("active"), {
+            let controller = controller.clone();
+            let toast_overlay = toast_overlay.clone();
+            let sender = sender.clone();
+            move |_, _| {
+                if controller.profile_update_guard.get() {
+                    return;
+                }
+                let tray_enabled = controller.ui.tray_icon_switch.is_active();
+                if !tray_enabled && controller.ui.start_minimized_switch.is_active() {
+                    toast_overlay.add_toast(adw::Toast::new(tr(
+                        controller.lang,
+                        "Без трея и с «Запускать в фоне» приложение может быть трудно открыть",
+                    )));
+                }
+                controller.mark_modified();
+                let _ = sender.send(AppMessage::SetTrayIconVisible(tray_enabled));
+            }
+        });
+
         autostart_switch.connect_notify_local(Some("active"), {
             let controller = controller.clone();
             let toast_overlay = toast_overlay.clone();
@@ -1934,42 +2105,21 @@ impl SettingsWindow {
             }
         });
 
-        start_hotkey_entry.connect_notify_local(Some("text"), {
-            let controller = controller.clone();
-            move |_, _| {
-                controller.mark_modified();
-                (controller.update_status)();
-            }
-        });
-
-        stop_hotkey_entry.connect_notify_local(Some("text"), {
-            let controller = controller.clone();
-            move |_, _| {
-                controller.mark_modified();
-                (controller.update_status)();
-            }
-        });
-
-        panic_hotkey_entry.connect_notify_local(Some("text"), {
-            let controller = controller.clone();
-            move |_, _| {
-                controller.mark_modified();
-                (controller.update_status)();
-            }
-        });
-
         setup_hotkey_capture(
             &start_hotkey_entry,
+            crate::config::DEFAULT_HOTKEY_START,
             controller.clone(),
             toast_overlay.clone(),
         );
         setup_hotkey_capture(
             &stop_hotkey_entry,
+            crate::config::DEFAULT_HOTKEY_STOP,
             controller.clone(),
             toast_overlay.clone(),
         );
         setup_hotkey_capture(
             &panic_hotkey_entry,
+            crate::config::DEFAULT_HOTKEY_PANIC,
             controller.clone(),
             toast_overlay.clone(),
         );
@@ -2014,6 +2164,215 @@ impl SettingsWindow {
                         AnimatedPattern::WaterRipples
                     );
                 controller.ui.water_ripples_bg_row.set_visible(is_water);
+                controller.mark_modified();
+                (controller.update_preview)();
+                (controller.update_status)();
+            }
+        });
+
+        shadertoy_source_row.connect_notify_local(Some("selected"), {
+            let controller = controller.clone();
+            let toast_overlay = toast_overlay.clone();
+            move |row, _| {
+                if controller.profile_update_guard.get() {
+                    return;
+                }
+                let mode_idx = selected_mode_index(&controller.ui.mode_selector);
+                if mode_idx != 9 {
+                    return;
+                }
+
+                if row.selected() == 0 {
+                    if let Some(saved) = controller.ui.shadertoy_manual_path.borrow().clone() {
+                        set_file_row_path(
+                            &controller.ui.file_row,
+                            &controller.ui.file_info_row,
+                            Some(saved.as_str()),
+                            tr(controller.lang, "Файл не выбран"),
+                            controller.lang,
+                        );
+                    }
+                } else {
+                    if let Some(path) = file_row_path(&controller.ui.file_row) {
+                        *controller.ui.shadertoy_manual_path.borrow_mut() =
+                            Some(path.to_string_lossy().to_string());
+                    }
+
+                    reload_shadertoy_packs_into_models(&controller);
+                    if controller.ui.shadertoy_pack_model.n_items() == 0 {
+                        toast_overlay.add_toast(adw::Toast::new(tr(
+                            controller.lang,
+                            "Шейдерпаки не найдены",
+                        )));
+                        set_file_row_path(
+                            &controller.ui.file_row,
+                            &controller.ui.file_info_row,
+                            None,
+                            tr(controller.lang, "Файл не выбран"),
+                            controller.lang,
+                        );
+                    } else {
+                        let pack_idx = controller.ui.shadertoy_pack_row.selected() as usize;
+                        rebuild_shadertoy_shader_model(&controller, pack_idx);
+                        if let Some(img) = shadertoy_selected_shader_image_path(&controller) {
+                            let img_str = img.to_string_lossy().to_string();
+                            set_file_row_path(
+                                &controller.ui.file_row,
+                                &controller.ui.file_info_row,
+                                Some(img_str.as_str()),
+                                tr(controller.lang, "Файл не выбран"),
+                                controller.lang,
+                            );
+                        }
+                    }
+                }
+
+                update_file_info_row(
+                    &controller.ui.file_info_row,
+                    file_row_path(&controller.ui.file_row),
+                    mode_idx,
+                    controller.lang,
+                );
+                set_content_mode_visibility(
+                    &controller.ui.stream_url_row,
+                    &controller.ui.shadertoy_source_row,
+                    &controller.ui.shadertoy_pack_row,
+                    &controller.ui.shadertoy_shader_row,
+                    &controller.ui.file_row,
+                    &controller.ui.file_info_row,
+                    &controller.ui.shader_check_row,
+                    &controller.ui.shadertoy_interaction_row,
+                    &controller.ui.shadertoy_hide_cursor_row,
+                    &controller.ui.shadertoy_sound_row,
+                    &controller.ui.slideshow_interval_row,
+                    &controller.ui.mute_row,
+                    &controller.ui.volume_row,
+                    &controller.ui.random_row,
+                    &controller.ui.media_list_row,
+                    &controller.ui.media_list_box,
+                    mode_idx,
+                );
+                controller.mark_modified();
+                (controller.update_preview)();
+                (controller.update_status)();
+            }
+        });
+
+        shadertoy_pack_row.connect_notify_local(Some("selected"), {
+            let controller = controller.clone();
+            let toast_overlay = toast_overlay.clone();
+            move |row, _| {
+                if controller.profile_update_guard.get() {
+                    return;
+                }
+                let mode_idx = selected_mode_index(&controller.ui.mode_selector);
+                if mode_idx != 9 || controller.ui.shadertoy_source_row.selected() != 1 {
+                    return;
+                }
+
+                rebuild_shadertoy_shader_model(&controller, row.selected() as usize);
+                if controller.ui.shadertoy_shader_model.n_items() == 0 {
+                    toast_overlay.add_toast(adw::Toast::new(tr(
+                        controller.lang,
+                        "В шейдерпаке нет шейдеров",
+                    )));
+                } else {
+                    // Force selection refresh: after swapping the model, AdwComboRow can keep showing
+                    // a stale "selected item" from the previous pack if the index doesn't change.
+                    controller
+                        .ui
+                        .shadertoy_shader_row
+                        .set_selected(gtk4::INVALID_LIST_POSITION);
+                    controller.ui.shadertoy_shader_row.set_selected(0);
+
+                    if let Some(img) = shadertoy_selected_shader_image_path(&controller) {
+                        let img_str = img.to_string_lossy().to_string();
+                        set_file_row_path(
+                            &controller.ui.file_row,
+                            &controller.ui.file_info_row,
+                            Some(img_str.as_str()),
+                            tr(controller.lang, "Файл не выбран"),
+                            controller.lang,
+                        );
+                    }
+                }
+
+                update_file_info_row(
+                    &controller.ui.file_info_row,
+                    file_row_path(&controller.ui.file_row),
+                    mode_idx,
+                    controller.lang,
+                );
+                set_content_mode_visibility(
+                    &controller.ui.stream_url_row,
+                    &controller.ui.shadertoy_source_row,
+                    &controller.ui.shadertoy_pack_row,
+                    &controller.ui.shadertoy_shader_row,
+                    &controller.ui.file_row,
+                    &controller.ui.file_info_row,
+                    &controller.ui.shader_check_row,
+                    &controller.ui.shadertoy_interaction_row,
+                    &controller.ui.shadertoy_hide_cursor_row,
+                    &controller.ui.shadertoy_sound_row,
+                    &controller.ui.slideshow_interval_row,
+                    &controller.ui.mute_row,
+                    &controller.ui.volume_row,
+                    &controller.ui.random_row,
+                    &controller.ui.media_list_row,
+                    &controller.ui.media_list_box,
+                    mode_idx,
+                );
+                controller.mark_modified();
+                (controller.update_preview)();
+                (controller.update_status)();
+            }
+        });
+
+        shadertoy_shader_row.connect_notify_local(Some("selected"), {
+            let controller = controller.clone();
+            move |_, _| {
+                if controller.profile_update_guard.get() {
+                    return;
+                }
+                let mode_idx = selected_mode_index(&controller.ui.mode_selector);
+                if mode_idx != 9 || controller.ui.shadertoy_source_row.selected() != 1 {
+                    return;
+                }
+                if let Some(img) = shadertoy_selected_shader_image_path(&controller) {
+                    let img_str = img.to_string_lossy().to_string();
+                    set_file_row_path(
+                        &controller.ui.file_row,
+                        &controller.ui.file_info_row,
+                        Some(img_str.as_str()),
+                        tr(controller.lang, "Файл не выбран"),
+                        controller.lang,
+                    );
+                }
+                update_file_info_row(
+                    &controller.ui.file_info_row,
+                    file_row_path(&controller.ui.file_row),
+                    mode_idx,
+                    controller.lang,
+                );
+                set_content_mode_visibility(
+                    &controller.ui.stream_url_row,
+                    &controller.ui.shadertoy_source_row,
+                    &controller.ui.shadertoy_pack_row,
+                    &controller.ui.shadertoy_shader_row,
+                    &controller.ui.file_row,
+                    &controller.ui.file_info_row,
+                    &controller.ui.shader_check_row,
+                    &controller.ui.shadertoy_interaction_row,
+                    &controller.ui.shadertoy_hide_cursor_row,
+                    &controller.ui.shadertoy_sound_row,
+                    &controller.ui.slideshow_interval_row,
+                    &controller.ui.mute_row,
+                    &controller.ui.volume_row,
+                    &controller.ui.random_row,
+                    &controller.ui.media_list_row,
+                    &controller.ui.media_list_box,
+                    mode_idx,
+                );
                 controller.mark_modified();
                 (controller.update_preview)();
                 (controller.update_status)();
@@ -2134,6 +2493,33 @@ impl SettingsWindow {
             }
         });
 
+        shadertoy_interaction_switch.connect_notify_local(Some("active"), {
+            let controller = controller.clone();
+            move |_, _| {
+                controller.mark_modified();
+                (controller.update_preview)();
+                (controller.update_status)();
+            }
+        });
+
+        shadertoy_hide_cursor_switch.connect_notify_local(Some("active"), {
+            let controller = controller.clone();
+            move |_, _| {
+                controller.mark_modified();
+                (controller.update_preview)();
+                (controller.update_status)();
+            }
+        });
+
+        shadertoy_sound_switch.connect_notify_local(Some("active"), {
+            let controller = controller.clone();
+            move |_, _| {
+                controller.mark_modified();
+                (controller.update_preview)();
+                (controller.update_status)();
+            }
+        });
+
         video_volume_spin.connect_value_changed({
             let controller = controller.clone();
             move |_| {
@@ -2233,6 +2619,25 @@ impl SettingsWindow {
                                 mode_idx,
                                 controller.lang,
                             );
+                            set_content_mode_visibility(
+                                &controller.ui.stream_url_row,
+                                &controller.ui.shadertoy_source_row,
+                                &controller.ui.shadertoy_pack_row,
+                                &controller.ui.shadertoy_shader_row,
+                                &controller.ui.file_row,
+                                &controller.ui.file_info_row,
+                                &controller.ui.shader_check_row,
+                                &controller.ui.shadertoy_interaction_row,
+                                &controller.ui.shadertoy_hide_cursor_row,
+                                &controller.ui.shadertoy_sound_row,
+                                &controller.ui.slideshow_interval_row,
+                                &controller.ui.mute_row,
+                                &controller.ui.volume_row,
+                                &controller.ui.random_row,
+                                &controller.ui.media_list_row,
+                                &controller.ui.media_list_box,
+                                mode_idx,
+                            );
                             controller.mark_modified();
                             (controller.update_preview)();
                             (controller.update_status)();
@@ -2279,6 +2684,25 @@ impl SettingsWindow {
                                 mode_idx,
                                 controller.lang,
                             );
+                            set_content_mode_visibility(
+                                &controller.ui.stream_url_row,
+                                &controller.ui.shadertoy_source_row,
+                                &controller.ui.shadertoy_pack_row,
+                                &controller.ui.shadertoy_shader_row,
+                                &controller.ui.file_row,
+                                &controller.ui.file_info_row,
+                                &controller.ui.shader_check_row,
+                                &controller.ui.shadertoy_interaction_row,
+                                &controller.ui.shadertoy_hide_cursor_row,
+                                &controller.ui.shadertoy_sound_row,
+                                &controller.ui.slideshow_interval_row,
+                                &controller.ui.mute_row,
+                                &controller.ui.volume_row,
+                                &controller.ui.random_row,
+                                &controller.ui.media_list_row,
+                                &controller.ui.media_list_box,
+                                mode_idx,
+                            );
                             controller.mark_modified();
                             (controller.update_preview)();
                             (controller.update_status)();
@@ -2324,6 +2748,25 @@ impl SettingsWindow {
                                 Some(path),
                                 mode_idx,
                                 controller.lang,
+                            );
+                            set_content_mode_visibility(
+                                &controller.ui.stream_url_row,
+                                &controller.ui.shadertoy_source_row,
+                                &controller.ui.shadertoy_pack_row,
+                                &controller.ui.shadertoy_shader_row,
+                                &controller.ui.file_row,
+                                &controller.ui.file_info_row,
+                                &controller.ui.shader_check_row,
+                                &controller.ui.shadertoy_interaction_row,
+                                &controller.ui.shadertoy_hide_cursor_row,
+                                &controller.ui.shadertoy_sound_row,
+                                &controller.ui.slideshow_interval_row,
+                                &controller.ui.mute_row,
+                                &controller.ui.volume_row,
+                                &controller.ui.random_row,
+                                &controller.ui.media_list_row,
+                                &controller.ui.media_list_box,
+                                mode_idx,
                             );
                             controller.mark_modified();
                             (controller.update_preview)();
@@ -2377,6 +2820,25 @@ impl SettingsWindow {
                             mode_idx,
                             controller.lang,
                         );
+                        set_content_mode_visibility(
+                            &controller.ui.stream_url_row,
+                            &controller.ui.shadertoy_source_row,
+                            &controller.ui.shadertoy_pack_row,
+                            &controller.ui.shadertoy_shader_row,
+                            &controller.ui.file_row,
+                            &controller.ui.file_info_row,
+                            &controller.ui.shader_check_row,
+                            &controller.ui.shadertoy_interaction_row,
+                            &controller.ui.shadertoy_hide_cursor_row,
+                            &controller.ui.shadertoy_sound_row,
+                            &controller.ui.slideshow_interval_row,
+                            &controller.ui.mute_row,
+                            &controller.ui.volume_row,
+                            &controller.ui.random_row,
+                            &controller.ui.media_list_row,
+                            &controller.ui.media_list_box,
+                            mode_idx,
+                        );
                         controller.mark_modified();
                         (controller.update_preview)();
                         (controller.update_status)();
@@ -2402,6 +2864,19 @@ impl SettingsWindow {
                     return;
                 }
 
+                let source_idx = controller.ui.shadertoy_source_row.selected();
+                let selected_pack_shader: Option<(String, String)> = if source_idx == 1 {
+                    let packs = controller.ui.shadertoy_packs.borrow();
+                    let pack = packs.get(controller.ui.shadertoy_pack_row.selected() as usize);
+                    let shader = pack.and_then(|p| p.shaders.get(controller.ui.shadertoy_shader_row.selected() as usize));
+                    match (pack, shader) {
+                        (Some(pack), Some(shader)) => Some((pack.name.clone(), shader.name.clone())),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
                 let Some(path) = file_row_path(&controller.ui.file_row) else {
                     toast_overlay.add_toast(adw::Toast::new(tr(controller.lang, "Файл не выбран")));
                     return;
@@ -2415,6 +2890,15 @@ impl SettingsWindow {
 
                 let detected = crate::ui::settings::content::detect_shadertoy_files(&path);
                 let mut body = String::new();
+                if let Some((pack_name, shader_name)) = selected_pack_shader {
+                    body.push_str(&format!(
+                        "{}: {}\n{}: {}\n\n",
+                        tr(controller.lang, "Шейдерпак"),
+                        pack_name,
+                        tr(controller.lang, "Шейдер"),
+                        shader_name
+                    ));
+                }
                 body.push_str(&format!(
                     "{}: {}\n\n",
                     tr(controller.lang, "Папка"),
@@ -2447,6 +2931,13 @@ impl SettingsWindow {
                         .unwrap_or("-");
                     body.push_str(&format!("{label}: {name}\n"));
                 }
+                let sound_name = detected
+                    .sound
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("-");
+                body.push_str(&format!("Sound: {sound_name}\n"));
 
                 let dialog = adw::MessageDialog::builder()
                     .transient_for(&window)
@@ -2894,9 +3385,12 @@ impl SettingsWindow {
             }
         });
 
-        lock_screen_switch.connect_notify_local(Some("active"), {
+        integrated_lock_screen_switch.connect_notify_local(Some("active"), {
             let controller = controller.clone();
             move |_, _| {
+                if controller.profile_update_guard.get() {
+                    return;
+                }
                 controller.mark_modified();
                 (controller.update_status)();
             }
@@ -3078,7 +3572,7 @@ fn build_status_text(
     fade_switch: &Switch,
     inhibit_switch: &Switch,
     power_integration_switch: &Switch,
-    lock_screen_switch: &Switch,
+    system_lock_screen_switch: &Switch,
     clock_switch: &Switch,
     clock_two_lines_switch: &Switch,
     clock_format_entry: &adw::EntryRow,
@@ -3215,6 +3709,18 @@ fn build_status_text(
     } else {
         tr(lang, "Нет").to_string()
     };
+    let start_hotkey_text = {
+        let v = start_hotkey_entry.text().to_string();
+        if v.is_empty() { "—".to_string() } else { v }
+    };
+    let stop_hotkey_text = {
+        let v = stop_hotkey_entry.text().to_string();
+        if v.is_empty() { "—".to_string() } else { v }
+    };
+    let panic_hotkey_text = {
+        let v = panic_hotkey_entry.text().to_string();
+        if v.is_empty() { "—".to_string() } else { v }
+    };
     tr(lang, "Профиль: {profile_name} • Режим: {mode_text}{slideshow_suffix} • Таймер: {inactivity}с • Задержка мыши: {mouse_delay_ms}мс • Без звука: {mute}{volume_suffix} • Сон: {inhibit} • Интеграция питания: {power_integration} • Блокировка: {lock_screen} • Часы: {clock} • Fade: {fade} • ГК: {start_hotkey}/{stop_hotkey}/{panic_hotkey}")
         .replace("{profile_name}", &name)
         .replace("{mode_text}", &mode_txt)
@@ -3225,12 +3731,12 @@ fn build_status_text(
         .replace("{volume_suffix}", &vol_suffix)
         .replace("{inhibit}", yes_no(lang, inhibit_switch.is_active()))
         .replace("{power_integration}", yes_no(lang, power_integration_switch.is_active()))
-        .replace("{lock_screen}", yes_no(lang, lock_screen_switch.is_active()))
+        .replace("{lock_screen}", yes_no(lang, system_lock_screen_switch.is_active()))
         .replace("{clock}", &clock_txt)
         .replace("{fade}", yes_no(lang, fade_switch.is_active()))
-        .replace("{start_hotkey}", &start_hotkey_entry.text())
-        .replace("{stop_hotkey}", &stop_hotkey_entry.text())
-        .replace("{panic_hotkey}", &panic_hotkey_entry.text())
+        .replace("{start_hotkey}", &start_hotkey_text)
+        .replace("{stop_hotkey}", &stop_hotkey_text)
+        .replace("{panic_hotkey}", &panic_hotkey_text)
 }
 
 fn selected_mode_index(mode_selector: &gtk4::FlowBox) -> u32 {
@@ -3270,9 +3776,15 @@ fn set_stack_for_mode(stack: &Stack, mode_idx: u32) {
 
 fn set_content_mode_visibility(
     stream_url_row: &adw::EntryRow,
+    shadertoy_source_row: &adw::ComboRow,
+    shadertoy_pack_row: &adw::ComboRow,
+    shadertoy_shader_row: &adw::ComboRow,
     file_row: &adw::ActionRow,
     file_info_row: &adw::ActionRow,
     shader_check_row: &adw::ActionRow,
+    shadertoy_interaction_row: &adw::ActionRow,
+    shadertoy_hide_cursor_row: &adw::ActionRow,
+    shadertoy_sound_row: &adw::ActionRow,
     slideshow_interval_row: &adw::ActionRow,
     mute_row: &adw::ActionRow,
     volume_row: &adw::ActionRow,
@@ -3287,18 +3799,168 @@ fn set_content_mode_visibility(
     let is_stream = mode_idx == 7;
     let is_python = mode_idx == 8;
     let is_shadertoy = mode_idx == 9;
+    let is_shaderpack_source = is_shadertoy && shadertoy_source_row.selected() == 1;
     let is_file_path = is_image || is_video || is_slideshow || is_python || is_shadertoy;
     let list_visible = is_image || is_video;
+    let has_shadertoy_sound = is_shadertoy
+        && crate::ui::settings::content::file_row_path(file_row)
+            .as_deref()
+            .map(shadertoy_dir_has_sound)
+            .unwrap_or(false);
     stream_url_row.set_visible(is_stream);
-    file_row.set_visible(is_file_path);
+    shadertoy_source_row.set_visible(is_shadertoy);
+    shadertoy_pack_row.set_visible(is_shaderpack_source);
+    shadertoy_shader_row.set_visible(is_shaderpack_source);
+    file_row.set_visible(is_file_path && !(is_shadertoy && is_shaderpack_source));
     file_info_row.set_visible(is_file_path);
     shader_check_row.set_visible(is_shadertoy);
+    shadertoy_interaction_row.set_visible(is_shadertoy);
+    shadertoy_hide_cursor_row.set_visible(is_shadertoy);
+    shadertoy_sound_row.set_visible(has_shadertoy_sound);
     slideshow_interval_row.set_visible(is_slideshow);
-    mute_row.set_visible(is_video || is_stream);
-    volume_row.set_visible(is_video || is_stream);
+    mute_row.set_visible(is_video || is_stream || has_shadertoy_sound);
+    volume_row.set_visible(is_video || is_stream || has_shadertoy_sound);
     random_row.set_visible(list_visible);
     media_list_row.set_visible(list_visible);
     media_list_box.set_visible(list_visible);
+}
+
+fn shadertoy_dir_has_sound(path: &std::path::Path) -> bool {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or_else(|| std::path::Path::new("."))
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !matches!(ext.as_str(), "glsl" | "frag" | "fs") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let key: String = stem
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        if key == "sound" {
+            return true;
+        }
+    }
+    false
+}
+
+fn reload_shadertoy_packs_into_models(controller: &SettingsController) {
+    let packs = match crate::shaderpacks::discover_installed_shaderpacks() {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("Shaderpack discovery failed: {err}");
+            Vec::new()
+        }
+    };
+
+    {
+        let mut dst = controller.ui.shadertoy_packs.borrow_mut();
+        *dst = packs;
+    }
+
+    let pack_names: Vec<String> = controller
+        .ui
+        .shadertoy_packs
+        .borrow()
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
+    let pack_name_refs: Vec<&str> = pack_names.iter().map(|s| s.as_str()).collect();
+    controller.ui.shadertoy_pack_model.splice(
+        0,
+        controller.ui.shadertoy_pack_model.n_items(),
+        &pack_name_refs,
+    );
+
+    if controller.ui.shadertoy_pack_model.n_items() == 0 {
+        controller
+            .ui
+            .shadertoy_shader_model
+            .splice(0, controller.ui.shadertoy_shader_model.n_items(), &[]);
+        return;
+    }
+
+    let pack_sel = controller
+        .ui
+        .shadertoy_pack_row
+        .selected()
+        .min(controller.ui.shadertoy_pack_model.n_items().saturating_sub(1));
+    controller.ui.shadertoy_pack_row.set_selected(pack_sel);
+    rebuild_shadertoy_shader_model(controller, pack_sel as usize);
+}
+
+fn rebuild_shadertoy_shader_model(controller: &SettingsController, pack_idx: usize) {
+    let packs = controller.ui.shadertoy_packs.borrow();
+    let Some(pack) = packs.get(pack_idx) else {
+        controller
+            .ui
+            .shadertoy_shader_model
+            .splice(0, controller.ui.shadertoy_shader_model.n_items(), &[]);
+        return;
+    };
+    let shader_names: Vec<String> = pack.shaders.iter().map(|s| s.name.clone()).collect();
+    let shader_name_refs: Vec<&str> = shader_names.iter().map(|s| s.as_str()).collect();
+    controller.ui.shadertoy_shader_model.splice(
+        0,
+        controller.ui.shadertoy_shader_model.n_items(),
+        &shader_name_refs,
+    );
+    if controller.ui.shadertoy_shader_model.n_items() > 0 {
+        let shader_sel = controller
+            .ui
+            .shadertoy_shader_row
+            .selected()
+            .min(controller.ui.shadertoy_shader_model.n_items().saturating_sub(1));
+        controller.ui.shadertoy_shader_row.set_selected(shader_sel);
+    }
+}
+
+fn shadertoy_selected_shader_image_path(controller: &SettingsController) -> Option<std::path::PathBuf> {
+    let pack_idx = controller.ui.shadertoy_pack_row.selected() as usize;
+    let shader_idx = controller.ui.shadertoy_shader_row.selected() as usize;
+    let packs = controller.ui.shadertoy_packs.borrow();
+    let pack = packs.get(pack_idx)?;
+    let shader = pack.shaders.get(shader_idx)?;
+    shader.detected.image.clone()
+}
+
+fn find_shadertoy_shaderpack_match_in_cache(
+    controller: &SettingsController,
+    path: &Path,
+) -> Option<(usize, usize, Option<std::path::PathBuf>)> {
+    let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let packs = controller.ui.shadertoy_packs.borrow();
+    for (pack_idx, pack) in packs.iter().enumerate() {
+        for (shader_idx, shader) in pack.shaders.iter().enumerate() {
+            let shader_dir = shader.dir.canonicalize().unwrap_or_else(|_| shader.dir.clone());
+            if target.starts_with(&shader_dir) {
+                return Some((pack_idx, shader_idx, shader.detected.image.clone()));
+            }
+            if let Some(img) = shader.detected.image.as_ref() {
+                let img_canon = img.canonicalize().unwrap_or_else(|_| img.clone());
+                if img_canon == target {
+                    return Some((pack_idx, shader_idx, shader.detected.image.clone()));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn set_file_row_path(
@@ -3895,42 +4557,159 @@ fn clock_format_from_ui(
 
 fn setup_hotkey_capture(
     entry: &Entry,
+    default_accel: &str,
     controller: Rc<SettingsController>,
     toast_overlay: adw::ToastOverlay,
 ) {
     let entry = entry.clone();
     let entry_clone = entry.clone();
+    let default_accel = default_accel.to_string();
+
+    // Ensure we have a stored accelerator even if the visible text is a friendly label.
+    set_hotkey_entry(&entry, &hotkey_entry_stored_accel_or_text(&entry));
+
+    entry.connect_icon_release({
+        let controller = controller.clone();
+        let toast_overlay = toast_overlay.clone();
+        move |entry, pos| {
+            if controller.profile_update_guard.get() {
+                return;
+            }
+            match pos {
+                EntryIconPosition::Primary => {
+                    set_hotkey_entry(entry, &default_accel);
+                    controller.mark_modified();
+                    (controller.update_status)();
+                    warn_hotkey_conflicts(&controller, &toast_overlay);
+                }
+                EntryIconPosition::Secondary => {
+                    set_hotkey_entry(entry, "");
+                    controller.mark_modified();
+                    (controller.update_status)();
+                    warn_hotkey_conflicts(&controller, &toast_overlay);
+                }
+                _ => {}
+            }
+        }
+    });
+
     let key_controller = EventControllerKey::new();
     key_controller.connect_key_pressed(move |_, keyval, _keycode, state| {
         if controller.profile_update_guard.get() {
             return glib::Propagation::Stop;
         }
         if keyval == Key::BackSpace {
-            entry_clone.set_text("");
+            set_hotkey_entry(&entry_clone, "");
             controller.mark_modified();
             (controller.update_status)();
+            warn_hotkey_conflicts(&controller, &toast_overlay);
             return glib::Propagation::Stop;
         }
-        if keyval == Key::Escape || is_modifier_key(keyval) {
+        if is_modifier_key(keyval) {
             return glib::Propagation::Stop;
         }
         let mods = filtered_modifiers(state);
+        // Allow Esc only when used with modifiers (default panic hotkey uses Escape).
+        if keyval == Key::Escape && mods.is_empty() {
+            return glib::Propagation::Stop;
+        }
         let valid = is_function_key(keyval) || has_primary_modifier(mods);
         if !valid {
-            toast_overlay.add_toast(adw::Toast::new(tr(controller.lang, "Некорректный формат")));
+            toast_overlay.add_toast(adw::Toast::new(tr(
+                controller.lang,
+                "Используйте Ctrl/Alt/Super или F-клавиши",
+            )));
             return glib::Propagation::Stop;
         }
-        let accel = gtk4::accelerator_name(keyval, mods);
-        if accel.is_empty() {
-            toast_overlay.add_toast(adw::Toast::new(tr(controller.lang, "Некорректный формат")));
+        let accel = gtk4::accelerator_name(keyval, mods).to_string();
+        if accel.trim().is_empty() {
+            toast_overlay.add_toast(adw::Toast::new(tr(
+                controller.lang,
+                "Не удалось распознать комбинацию",
+            )));
             return glib::Propagation::Stop;
         }
-        entry_clone.set_text(&accel);
+        set_hotkey_entry(&entry_clone, &accel);
         controller.mark_modified();
         (controller.update_status)();
+        warn_hotkey_conflicts(&controller, &toast_overlay);
         glib::Propagation::Stop
     });
     entry.add_controller(key_controller);
+}
+
+const HOTKEY_ACCEL_DATA_KEY: &str = "vesper-hotkey-accel";
+
+fn hotkey_entry_stored_accel_or_text(entry: &Entry) -> String {
+    let stored = unsafe {
+        entry
+            .data::<String>(HOTKEY_ACCEL_DATA_KEY)
+            .map(|v| v.as_ref().clone())
+            .unwrap_or_default()
+    };
+    if !stored.trim().is_empty() {
+        return stored;
+    }
+    // Fallback (should be replaced by `set_hotkey_entry` on init).
+    entry.text().to_string()
+}
+
+fn hotkey_entry_accel(entry: &Entry) -> String {
+    let accel = hotkey_entry_stored_accel_or_text(entry);
+    // Try to normalize to a GTK accelerator string if we only have a label.
+    if gtk4::accelerator_parse(&accel).is_some() {
+        accel
+    } else {
+        String::new()
+    }
+}
+
+fn accel_to_label(accel: &str) -> String {
+    let accel = accel.trim();
+    if accel.is_empty() {
+        return String::new();
+    }
+    if let Some((key, mods)) = gtk4::accelerator_parse(accel) {
+        gtk4::accelerator_get_label(key, mods).to_string()
+    } else {
+        accel.to_string()
+    }
+}
+
+fn set_hotkey_entry(entry: &Entry, accel: &str) {
+    let accel = accel.trim().to_string();
+    unsafe {
+        entry.set_data(HOTKEY_ACCEL_DATA_KEY, accel.clone());
+    }
+    entry.set_text(&accel_to_label(&accel));
+    entry.set_icon_sensitive(EntryIconPosition::Secondary, !accel.is_empty());
+    entry.set_icon_activatable(EntryIconPosition::Secondary, !accel.is_empty());
+}
+
+fn warn_hotkey_conflicts(controller: &SettingsController, toast_overlay: &adw::ToastOverlay) {
+    let start = hotkey_entry_accel(&controller.ui.start_hotkey_entry);
+    let stop = hotkey_entry_accel(&controller.ui.stop_hotkey_entry);
+    let panic = hotkey_entry_accel(&controller.ui.panic_hotkey_entry);
+    if !start.is_empty() && start == stop {
+        toast_overlay.add_toast(adw::Toast::new(
+            &tr(controller.lang, "Конфликт: запуск и остановка используют {hotkey}")
+                .replace("{hotkey}", &accel_to_label(&start)),
+        ));
+        return;
+    }
+    if !start.is_empty() && start == panic {
+        toast_overlay.add_toast(adw::Toast::new(
+            &tr(controller.lang, "Конфликт: запуск и принудительное закрытие используют {hotkey}")
+                .replace("{hotkey}", &accel_to_label(&start)),
+        ));
+        return;
+    }
+    if !stop.is_empty() && stop == panic {
+        toast_overlay.add_toast(adw::Toast::new(
+            &tr(controller.lang, "Конфликт: остановка и принудительное закрытие используют {hotkey}")
+                .replace("{hotkey}", &accel_to_label(&stop)),
+        ));
+    }
 }
 
 fn filtered_modifiers(state: ModifierType) -> ModifierType {

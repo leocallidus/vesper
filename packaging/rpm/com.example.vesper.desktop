@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Vesper
+Comment=Rust Screensaver Application
+Exec=vesper
+TryExec=vesper
+Icon=vesper
+Terminal=false
+StartupWMClass=vesper
+Categories=Utility;
+StartupNotify=false
+

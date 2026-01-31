@@ -20,13 +20,16 @@ const ICON_CANDIDATES: [&str; 3] = [
 ];
 
 pub fn get_local_icon_theme_path() -> Option<PathBuf> {
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        let icon_dir = PathBuf::from(appdir).join("usr/share/icons");
+        if icon_dir.is_dir() {
+            return Some(icon_dir);
+        }
+    }
+
     let cwd = std::env::current_dir().ok()?;
     let target_icons = cwd.join("target/icons");
-    if target_icons.exists() {
-        Some(target_icons)
-    } else {
-        None
-    }
+    target_icons.exists().then_some(target_icons)
 }
 
 pub fn init_app_icon_theme() {

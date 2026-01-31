@@ -187,7 +187,6 @@ pub fn build_appearance_group(config: &Config, lang: Language) -> AppearanceWidg
     preview_art.set_size_request(96, 96);
     preview_art.set_content_fit(gtk4::ContentFit::Cover);
     preview_art.set_can_shrink(false);
-    preview_art.set_keep_aspect_ratio(true);
 
     let text_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     text_box.set_hexpand(true);

@@ -160,20 +160,24 @@ impl ScreensaverWindow {
             }
         };
 
-        let monitors = monitors_override.unwrap_or_else(|| Self::get_monitors(&display));
+        let mut monitors = monitors_override.unwrap_or_else(|| Self::get_monitors(&display));
+        // Keep a stable X11 monitor order for fullscreen hints.
+        monitors.sort_by_key(|m| {
+            let g = m.geometry();
+            (g.x(), g.y(), g.width(), g.height())
+        });
         let is_x11 = display.backend().is_x11();
         let track_mouse_activity = match config_clone.mode {
             ScreensaverMode::Web(_) => !config_clone.web_interaction_enabled,
+            ScreensaverMode::Shadertoy(_) => !config_clone.shadertoy_interaction_enabled,
             ScreensaverMode::Pattern(AnimatedPattern::SmokeInk) => false,
             _ => true,
         };
 
         if monitors.is_empty() {
             let (window, media, slideshow_picture, clock_label, clock_time_label, clock_date_label) =
-                Self::create_window_with_content(app.as_ref(), config, is_x11, None);
-            if !is_x11 {
-                window.fullscreen();
-            }
+                Self::create_window_with_content(app.as_ref(), config, true, is_x11, None, None, true);
+            window.fullscreen();
             Self::setup_activity_tracking(
                 &window,
                 on_activity_wrapped.clone(),
@@ -209,8 +213,27 @@ impl ScreensaverWindow {
                 clock_date_label,
             });
         } else {
-            for monitor in &monitors {
+            let mut shadertoy_audio_assigned = false;
+            let mut x11_grab_assigned = false;
+            for (monitor_idx, monitor) in monitors.iter().enumerate() {
                 let geometry = monitor.geometry();
+                let allow_audio = match config_clone.mode {
+                    ScreensaverMode::Shadertoy(_) => {
+                        if shadertoy_audio_assigned {
+                            false
+                        } else {
+                            shadertoy_audio_assigned = true;
+                            true
+                        }
+                    }
+                    _ => true,
+                };
+                let allow_x11_keyboard_grab = if is_x11 && !x11_grab_assigned {
+                    x11_grab_assigned = true;
+                    true
+                } else {
+                    false
+                };
                 let (
                     window,
                     media,
@@ -218,11 +241,17 @@ impl ScreensaverWindow {
                     clock_label,
                     clock_time_label,
                     clock_date_label,
-                ) = Self::create_window_with_content(app.as_ref(), config, is_x11, Some(geometry));
+                ) = Self::create_window_with_content(
+                    app.as_ref(),
+                    config,
+                    allow_audio,
+                    is_x11,
+                    Some(geometry),
+                    Some(monitor_idx as u32),
+                    allow_x11_keyboard_grab,
+                );
                 window.set_default_size(geometry.width(), geometry.height());
-                if !is_x11 {
-                    window.fullscreen_on_monitor(monitor);
-                }
+                window.fullscreen_on_monitor(monitor);
                 Self::setup_activity_tracking(
                     &window,
                     on_activity_wrapped.clone(),
@@ -320,8 +349,11 @@ impl ScreensaverWindow {
     fn create_window_with_content(
         app: Option<&gtk4::Application>,
         config: &SettingsProfile,
+        allow_audio: bool,
         is_x11: bool,
-        geometry: Option<gdk4::Rectangle>,
+        _geometry: Option<gdk4::Rectangle>,
+        x11_monitor_idx: Option<u32>,
+        x11_grab_keyboard: bool,
     ) -> (
         ApplicationWindow,
         Option<MediaFile>,
@@ -343,15 +375,17 @@ impl ScreensaverWindow {
 
         let window = builder.build();
 
-        let show_cursor =
-            matches!(config.mode, ScreensaverMode::Web(_)) && config.web_interaction_enabled;
+        let show_cursor = (matches!(config.mode, ScreensaverMode::Web(_)) && config.web_interaction_enabled)
+            || (matches!(config.mode, ScreensaverMode::Shadertoy(_))
+                && config.shadertoy_interaction_enabled
+                && !config.shadertoy_hide_cursor);
         if !show_cursor {
             if let Some(cursor) = gdk4::Cursor::from_name("none", None) {
                 window.set_cursor(Some(&cursor));
             }
         }
 
-        let (media, slideshow_picture) = Self::setup_window_content(&window, config);
+        let (media, slideshow_picture) = Self::setup_window_content(&window, config, allow_audio);
         let (clock_label, clock_time_label, clock_date_label) = if config.show_clock {
             if config.clock_two_lines {
                 let (t, d) = Self::attach_clock_overlay_two_lines(
@@ -387,12 +421,20 @@ impl ScreensaverWindow {
         };
 
         if is_x11 {
-            let geom = geometry;
+            let geom = _geometry;
             window.connect_realize(move |window| {
                 if let Some(surface) = window.surface() {
                     if let Ok(x11_surface) = surface.downcast::<gdk4_x11::X11Surface>() {
                         let xid = x11_surface.xid() as u32;
-                        Self::configure_x11_override_redirect(xid, geom);
+                        if let Some(g) = geom {
+                            Self::configure_x11_position(xid, g);
+                        }
+                        if let Some(idx) = x11_monitor_idx {
+                            Self::configure_x11_fullscreen_monitors(xid, idx);
+                        }
+                        if x11_grab_keyboard {
+                            Self::configure_x11_keyboard_grab(xid);
+                        }
                     }
                 }
             });
@@ -670,59 +712,84 @@ impl ScreensaverWindow {
         }
     }
 
-    fn configure_x11_override_redirect(xid: u32, geom: Option<gdk4::Rectangle>) {
+    fn configure_x11_position(xid: u32, geom: gdk4::Rectangle) {
+        let Ok((conn, _)) = x11rb::connect(None) else {
+            return;
+        };
+        let _ = conn.configure_window(
+            xid,
+            &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                .x(geom.x())
+                .y(geom.y()),
+        );
+        let _ = conn.flush();
+    }
+
+    fn intern_x11_atom(conn: &x11rb::rust_connection::RustConnection, name: &[u8]) -> Option<u32> {
+        conn.intern_atom(false, name)
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| r.atom)
+    }
+
+    fn configure_x11_fullscreen_monitors(xid: u32, monitor_idx: u32) {
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return;
+        };
+        let root = conn.setup().roots.get(screen_num).map(|s| s.root);
+        let Some(root) = root else {
+            return;
+        };
+        let Some(atom_fullscreen_monitors) =
+            Self::intern_x11_atom(&conn, b"_NET_WM_FULLSCREEN_MONITORS")
+        else {
+            return;
+        };
+
+        // EWMH: send _NET_WM_FULLSCREEN_MONITORS client message to the root window.
+        // data32: [top, bottom, left, right, source_indication]
+        let msg = x11rb::protocol::xproto::ClientMessageEvent::new(
+            32,
+            xid,
+            atom_fullscreen_monitors,
+            [
+                monitor_idx,
+                monitor_idx,
+                monitor_idx,
+                monitor_idx,
+                1, // application
+            ],
+        );
+        let _ = conn.send_event(
+            false,
+            root,
+            x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+                | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+            msg,
+        );
+        let _ = conn.flush();
+    }
+
+    fn configure_x11_keyboard_grab(xid: u32) {
         let Ok((conn, _)) = x11rb::connect(None) else {
             return;
         };
 
-        // Unmap first, then set override-redirect, then remap
-        let _ = conn.unmap_window(xid);
-
-        let _ = conn.change_window_attributes(
-            xid,
-            &x11rb::protocol::xproto::ChangeWindowAttributesAux::new().override_redirect(1),
-        );
-
-        if let Some(g) = geom {
-            let _ = conn.configure_window(
-                xid,
-                &x11rb::protocol::xproto::ConfigureWindowAux::new()
-                    .x(g.x())
-                    .y(g.y())
-                    .width(g.width() as u32)
-                    .height(g.height() as u32)
-                    .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
-            );
-        }
-
-        let _ = conn.map_window(xid);
-
-        // Raise to top
+        // Raise to top (best-effort; WM may override).
         let _ = conn.configure_window(
             xid,
             &x11rb::protocol::xproto::ConfigureWindowAux::new()
                 .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE),
         );
 
-        // Grab keyboard and pointer
+        // Grab keyboard only. Pointer grab breaks multi-monitor interaction on X11.
         let _ = conn.grab_keyboard(
             true,
             xid,
             x11rb::CURRENT_TIME,
             x11rb::protocol::xproto::GrabMode::ASYNC,
             x11rb::protocol::xproto::GrabMode::ASYNC,
-        );
-        let _ = conn.grab_pointer(
-            true,
-            xid,
-            x11rb::protocol::xproto::EventMask::POINTER_MOTION
-                | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
-                | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE,
-            x11rb::protocol::xproto::GrabMode::ASYNC,
-            x11rb::protocol::xproto::GrabMode::ASYNC,
-            xid,
-            0u32,
-            x11rb::CURRENT_TIME,
         );
 
         let _ = conn.flush();
@@ -731,6 +798,7 @@ impl ScreensaverWindow {
     fn setup_window_content(
         window: &ApplicationWindow,
         config: &SettingsProfile,
+        allow_audio: bool,
     ) -> (Option<MediaFile>, Option<Picture>) {
         match &config.mode {
             ScreensaverMode::Color(hex) => {
@@ -842,7 +910,19 @@ impl ScreensaverWindow {
                     Self::setup_color_content(window, "#000000");
                     (None, None)
                 } else {
-                    Self::setup_shadertoy_content(window, path, config.pattern_density);
+                    let enable_sound = allow_audio
+                        && config.shadertoy_sound_enabled
+                        && !config.mute_video
+                        && config.video_volume > 0;
+                    let volume = (config.video_volume as f32 / 100.0).clamp(0.0, 1.0);
+                    Self::setup_shadertoy_content(
+                        window,
+                        path,
+                        config.pattern_density,
+                        enable_sound,
+                        volume,
+                        config.shadertoy_interaction_enabled,
+                    );
                     (None, None)
                 }
             }
@@ -859,8 +939,21 @@ impl ScreensaverWindow {
         window.set_child(Some(&area));
     }
 
-    fn setup_shadertoy_content(window: &ApplicationWindow, shader_path: &str, density: PatternDensity) {
-        let area = crate::ui::shadertoy::build_shadertoy_area(shader_path, density);
+    fn setup_shadertoy_content(
+        window: &ApplicationWindow,
+        shader_path: &str,
+        density: PatternDensity,
+        enable_sound: bool,
+        sound_volume: f32,
+        enable_mouse: bool,
+    ) {
+        let area = crate::ui::shadertoy::build_shadertoy_area_with_options(
+            shader_path,
+            density,
+            enable_sound,
+            sound_volume,
+            enable_mouse,
+        );
         window.set_child(Some(&area));
     }
 
@@ -952,6 +1045,7 @@ impl ScreensaverWindow {
         window.set_child(Some(&web_view));
     }
 
+    #[allow(dead_code)]
     fn apply_theme(r: f64, g: f64, b: f64, theme: PatternTheme) -> (f64, f64, f64) {
         match theme {
             PatternTheme::Default => (r, g, b),
@@ -971,6 +1065,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1056,6 +1151,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_matrix_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1095,6 +1191,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_stars_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1133,6 +1230,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_geometry_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1185,6 +1283,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_flowfield_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1247,6 +1346,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_aurora_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1313,6 +1413,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_plasma_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1364,6 +1465,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_bokeh_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1423,6 +1525,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_constellation_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1496,6 +1599,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_lissajous_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1562,6 +1666,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_waves_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1627,6 +1732,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_voronoi_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1706,6 +1812,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn draw_scanline_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1764,6 +1871,7 @@ impl ScreensaverWindow {
         let _ = cr.fill();
     }
 
+    #[allow(dead_code)]
     fn draw_fireflies_pattern(
         cr: &cairo::Context,
         width: f64,
@@ -1828,6 +1936,7 @@ impl ScreensaverWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn hash_u32(value: u32) -> u32 {
         let mut x = value;
         x ^= x >> 16;
@@ -1838,6 +1947,7 @@ impl ScreensaverWindow {
         x
     }
 
+    #[allow(dead_code)]
     fn hash_f64(value: u32) -> f64 {
         Self::hash_u32(value) as f64 / u32::MAX as f64
     }
@@ -2256,7 +2366,7 @@ impl ScreensaverWindow {
                     if let Some(text) = text {
                         w.label.set_text(text);
                         w.root.set_visible(true);
-                        let start = w.root.allocated_width().max(0) as f64;
+                        let start = w.root.width().max(0) as f64;
                         w.x.set(start);
                         w.fixed.move_(&w.label, start, 0.0);
                     } else {
@@ -2275,7 +2385,7 @@ impl ScreensaverWindow {
                 if !w.root.is_visible() {
                     continue;
                 }
-                let container_width = w.root.allocated_width().max(0) as f64;
+                let container_width = w.root.width().max(0) as f64;
                 if container_width <= 0.0 {
                     continue;
                 }
@@ -2467,7 +2577,6 @@ impl ScreensaverWindow {
         let art = Picture::new();
         art.set_size_request(96, 96);
         art.set_can_shrink(false);
-        art.set_keep_aspect_ratio(true);
         art.set_content_fit(ContentFit::Cover);
 
         let text_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);

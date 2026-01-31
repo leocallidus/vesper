@@ -122,7 +122,7 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
 }
 
 struct ShmBuffer {
-    file: File,
+    _file: File,
     pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
     map: *mut u8,
@@ -180,7 +180,7 @@ impl ShmBuffer {
         );
 
         Ok(Self {
-            file,
+            _file: file,
             pool,
             buffer,
             map: map as *mut u8,

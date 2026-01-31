@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::i18n::{language_index, language_label, tr, Language};
 use gtk4::prelude::*;
-use gtk4::{Align, Entry, SpinButton, Switch};
+use gtk4::{Align, Entry, EntryIconPosition, SpinButton, Switch};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
@@ -73,7 +73,7 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
         .title(tr(lang, "Горячие клавиши"))
         .description(tr(
             lang,
-            "Работают при активном окне приложения. Backspace — очистить",
+            "Кликните поле и нажмите комбинацию. Esc — отмена, Backspace — очистить",
         ))
         .build();
 
@@ -87,6 +87,19 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
     start_hotkey_entry.set_can_focus(true);
     start_hotkey_entry.set_placeholder_text(Some(tr(lang, "Нажмите комбинацию")));
     start_hotkey_entry.set_text(&config.hotkey_start);
+    start_hotkey_entry.set_icon_from_icon_name(
+        EntryIconPosition::Primary,
+        Some("view-refresh-symbolic"),
+    );
+    start_hotkey_entry.set_icon_tooltip_text(
+        EntryIconPosition::Primary,
+        Some(tr(lang, "Сбросить по умолчанию")),
+    );
+    start_hotkey_entry.set_icon_from_icon_name(
+        EntryIconPosition::Secondary,
+        Some("edit-clear-symbolic"),
+    );
+    start_hotkey_entry.set_icon_tooltip_text(EntryIconPosition::Secondary, Some(tr(lang, "Очистить")));
     start_hotkey_row.add_suffix(&start_hotkey_entry);
     start_hotkey_row.set_activatable_widget(Some(&start_hotkey_entry));
 
@@ -100,6 +113,13 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
     stop_hotkey_entry.set_can_focus(true);
     stop_hotkey_entry.set_placeholder_text(Some(tr(lang, "Нажмите комбинацию")));
     stop_hotkey_entry.set_text(&config.hotkey_stop);
+    stop_hotkey_entry.set_icon_from_icon_name(EntryIconPosition::Primary, Some("view-refresh-symbolic"));
+    stop_hotkey_entry.set_icon_tooltip_text(
+        EntryIconPosition::Primary,
+        Some(tr(lang, "Сбросить по умолчанию")),
+    );
+    stop_hotkey_entry.set_icon_from_icon_name(EntryIconPosition::Secondary, Some("edit-clear-symbolic"));
+    stop_hotkey_entry.set_icon_tooltip_text(EntryIconPosition::Secondary, Some(tr(lang, "Очистить")));
     stop_hotkey_row.add_suffix(&stop_hotkey_entry);
     stop_hotkey_row.set_activatable_widget(Some(&stop_hotkey_entry));
 
@@ -114,6 +134,19 @@ pub fn build_general_group(config: &Config, lang: Language) -> GeneralWidgets {
     panic_hotkey_entry.set_can_focus(true);
     panic_hotkey_entry.set_placeholder_text(Some(tr(lang, "Нажмите комбинацию")));
     panic_hotkey_entry.set_text(&config.hotkey_panic);
+    panic_hotkey_entry.set_icon_from_icon_name(
+        EntryIconPosition::Primary,
+        Some("view-refresh-symbolic"),
+    );
+    panic_hotkey_entry.set_icon_tooltip_text(
+        EntryIconPosition::Primary,
+        Some(tr(lang, "Сбросить по умолчанию")),
+    );
+    panic_hotkey_entry.set_icon_from_icon_name(
+        EntryIconPosition::Secondary,
+        Some("edit-clear-symbolic"),
+    );
+    panic_hotkey_entry.set_icon_tooltip_text(EntryIconPosition::Secondary, Some(tr(lang, "Очистить")));
     panic_hotkey_row.add_suffix(&panic_hotkey_entry);
     panic_hotkey_row.set_activatable_widget(Some(&panic_hotkey_entry));
 

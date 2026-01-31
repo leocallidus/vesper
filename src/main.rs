@@ -8,6 +8,7 @@ mod idle;
 mod monitors;
 mod mpris;
 mod rss;
+mod shaderpacks;
 mod sysstats;
 mod tray;
 mod ui;
@@ -16,7 +17,6 @@ mod wayland_lock;
 use gio::{ApplicationFlags, Notification, SimpleAction};
 use gtk4::prelude::*;
 use gtk4::{Align, Application, Box as GtkBox, Orientation};
-use ksni::TrayMethods;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use std::path::Path;
@@ -35,7 +35,7 @@ use config::{
 };
 use i18n::{cli_usage, resolve_language, system_language, tr, yes_no, Language};
 use idle::IdleMonitor;
-use tray::TrayHandler;
+use tray::TrayCommand;
 use ui::{ScreensaverWindow, SettingsWindow};
 
 pub enum AppMessage {
@@ -49,6 +49,7 @@ pub enum AppMessage {
     SwitchProfile(u8),
     ToggleEnabled(bool),
     ToggleInhibitSleep(bool),
+    SetTrayIconVisible(bool),
     ShowMainWindow,
     UpdateConfig(Config),
     Quit,
@@ -80,11 +81,13 @@ struct AppState {
     screensaver_started_at: Arc<Mutex<Option<Instant>>>,
     screensaver_windows: Arc<Mutex<Option<Vec<ScreensaverWindow>>>>,
     wayland_lock: Arc<Mutex<Option<wayland_lock::SessionLockController>>>,
+    lock_on_user_activity: Arc<std::sync::atomic::AtomicBool>,
     on_battery: Arc<Mutex<bool>>,
     battery_forced_black: Arc<Mutex<bool>>,
     main_window: Arc<Mutex<Option<adw::ApplicationWindow>>>,
     is_enabled: Arc<Mutex<bool>>,
     inhibit_sleep: Arc<Mutex<bool>>,
+    tray_control: tokio::sync::mpsc::UnboundedSender<TrayCommand>,
     inhibit_cookie: Arc<Mutex<Option<u32>>>,
     last_problem_notification: Arc<Mutex<Option<(String, Instant)>>>,
     last_warning_notification: Arc<Mutex<Option<(String, Instant)>>>,
@@ -191,6 +194,7 @@ fn main() {
     let config = Config::load();
     autostart::migrate_legacy_autostart();
     let inhibit_sleep_initial = config.active_profile().inhibit_sleep;
+    let tray_icon_enabled = config.tray_icon_enabled;
     let lang = resolve_language(config.language);
     let status = Arc::new(Mutex::new(StatusSnapshot::from_config(
         &config,
@@ -200,17 +204,27 @@ fn main() {
     )));
 
     let (sender, receiver) = mpsc::channel();
+    let is_enabled = Arc::new(Mutex::new(true));
+    let inhibit_sleep = Arc::new(Mutex::new(inhibit_sleep_initial));
+    let tray_control = tray::spawn_tray_controller(
+        sender.clone(),
+        Arc::clone(&is_enabled),
+        Arc::clone(&inhibit_sleep),
+        tray_icon_enabled,
+    );
     let state = Arc::new(AppState {
         config: Arc::new(Mutex::new(config)),
         screensaver_active: Arc::new(Mutex::new(false)),
         screensaver_started_at: Arc::new(Mutex::new(None)),
         screensaver_windows: Arc::new(Mutex::new(None)),
         wayland_lock: Arc::new(Mutex::new(None)),
+        lock_on_user_activity: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         on_battery: Arc::new(Mutex::new(false)),
         battery_forced_black: Arc::new(Mutex::new(false)),
         main_window: Arc::new(Mutex::new(None)),
-        is_enabled: Arc::new(Mutex::new(true)),
-        inhibit_sleep: Arc::new(Mutex::new(inhibit_sleep_initial)),
+        is_enabled,
+        inhibit_sleep,
+        tray_control,
         inhibit_cookie: Arc::new(Mutex::new(None)),
         last_problem_notification: Arc::new(Mutex::new(None)),
         last_warning_notification: Arc::new(Mutex::new(None)),
@@ -241,22 +255,6 @@ fn main() {
     let activate_sender = sender.clone();
     app.connect_activate(move |app| {
         setup_app(app, Arc::clone(&state_clone), activate_sender.clone());
-    });
-
-    // Tray
-    let tray_sender = sender.clone();
-    let tray_enabled = Arc::clone(&state.is_enabled);
-    let tray_inhibit = Arc::clone(&state.inhibit_sleep);
-    thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let tray = TrayHandler::new(tray_sender, tray_enabled, tray_inhibit);
-            if let Err(e) = tray.spawn().await {
-                eprintln!("System tray not available: {}", e);
-            } else {
-                std::future::pending::<()>().await;
-            }
-        });
     });
 
     // Activity monitor using Wayland ext-idle-notify
@@ -360,9 +358,16 @@ fn main() {
                     config.active_profile_mut().inhibit_sleep = inhibit;
                     let _ = config.save();
                 }
+                AppMessage::SetTrayIconVisible(visible) => {
+                    let _ = state_receiver.tray_control.send(TrayCommand::SetVisible(visible));
+                    state_receiver.config.lock().unwrap().tray_icon_enabled = visible;
+                }
                 AppMessage::UpdateConfig(config) => {
                     let lang = resolve_language(config.language);
                     *state_receiver.config.lock().unwrap() = config.clone();
+                    let _ = state_receiver
+                        .tray_control
+                        .send(TrayCommand::SetVisible(config.tray_icon_enabled));
                     if let Ok(mut status) = state_receiver.status.lock() {
                         update_status_profile(&mut status, &config, lang);
                     }
@@ -390,6 +395,7 @@ fn main() {
                     }
                 }
                 AppMessage::Quit => {
+                    let _ = state_receiver.tray_control.send(TrayCommand::Quit);
                     stop_screensaver(Arc::clone(&state_receiver), StopReason::Requested);
                     if let Some(main_window) = state_receiver.main_window.lock().unwrap().as_ref() {
                         if let Some(app) = main_window.application() {
@@ -1012,6 +1018,11 @@ fn stop_screensaver(state: Arc<AppState>, reason: StopReason) {
         }
     }
 
+    let should_lock_on_activity = matches!(reason, StopReason::UserActivity)
+        && state
+            .lock_on_user_activity
+            .load(std::sync::atomic::Ordering::Relaxed);
+
     if let Some(started_at) = state.screensaver_started_at.lock().unwrap().take() {
         let elapsed = started_at.elapsed().as_secs();
         let mut config = state.config.lock().unwrap();
@@ -1029,11 +1040,9 @@ fn stop_screensaver(state: Arc<AppState>, reason: StopReason) {
             screensaver.hide();
         }
     }
-    if matches!(reason, StopReason::UserActivity) {
-        let profile = state.config.lock().unwrap().active_profile().clone();
-        glib::timeout_add_local_once(Duration::from_millis(300), move || {
-            request_screen_lock(&profile);
-        });
+
+    if should_lock_on_activity {
+        thread::spawn(request_screen_lock);
     }
 
     if let Ok(mut status) = state.status.lock() {
@@ -1089,7 +1098,8 @@ fn start_screensaver(state: Arc<AppState>) {
     let started_at = Arc::clone(&state.screensaver_started_at);
     let state_clone = Arc::clone(&state);
 
-    // Prefer ext-session-lock-v1 on Wayland when available.
+    // Prefer ext-session-lock-v1 on Wayland when available (but skip it when we need to
+    // hand control to the system lock screen on activity).
     let is_wayland = gdk4::Display::default()
         .map(|d| d.backend().is_wayland())
         .unwrap_or(false);
@@ -1097,11 +1107,20 @@ fn start_screensaver(state: Arc<AppState>) {
         profile_for_activation.mode,
         ScreensaverMode::Color(_) | ScreensaverMode::Gradient { .. }
     );
-    if is_wayland && try_wayland_lock {
+    let lock_on_activity = profile_for_activation
+        .integrated_lock_screen_enabled
+        .unwrap_or(profile_for_activation.lock_screen_enabled);
+    if is_wayland && try_wayland_lock && !lock_on_activity {
         if let Some(lock) = wayland_lock::start_wayland_session_lock_screensaver(
             &profile_for_activation,
             state.sender.clone(),
         ) {
+            state
+                .lock_on_user_activity
+                .store(
+                    lock_on_activity,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             *state.screensaver_active.lock().unwrap() = true;
             *state.screensaver_started_at.lock().unwrap() = Some(Instant::now());
             *state.wayland_lock.lock().unwrap() = Some(lock);
@@ -1171,21 +1190,38 @@ fn start_screensaver(state: Arc<AppState>) {
         }
     }
 
-    // Avoid audio "doubling" when multiple screensaver instances play video.
+    // Avoid audio "doubling" when multiple screensaver instances play audio.
     let mut audio_assigned = false;
     for (p, _) in &mut effective {
-        let wants_audio = !p.mute_video
+        let wants_audio = (!p.mute_video
             && matches!(
                 p.mode,
                 ScreensaverMode::Video(_) | ScreensaverMode::Stream(_)
-            );
+            ))
+            || (!p.mute_video
+                && p.shadertoy_sound_enabled
+                && matches!(&p.mode, ScreensaverMode::Shadertoy(path) if shadertoy_has_sound(path)));
         if wants_audio && !audio_assigned {
             audio_assigned = true;
         } else if wants_audio {
-            p.mute_video = true;
-            p.video_volume = 0;
+            if matches!(p.mode, ScreensaverMode::Video(_) | ScreensaverMode::Stream(_)) {
+                p.mute_video = true;
+                p.video_volume = 0;
+            } else {
+                p.shadertoy_sound_enabled = false;
+            }
         }
     }
+
+    state
+        .lock_on_user_activity
+        .store(
+            effective.iter().any(|(p, _)| {
+                p.integrated_lock_screen_enabled
+                    .unwrap_or(p.lock_screen_enabled)
+            }),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
     let activity_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let on_activity = {
@@ -1318,16 +1354,23 @@ fn replace_active_screensaver_windows(state: Arc<AppState>, battery_black: bool,
     // Avoid audio doubling across instances.
     let mut audio_assigned = false;
     for (p, _) in &mut effective {
-        let wants_audio = !p.mute_video
+        let wants_audio = (!p.mute_video
             && matches!(
                 p.mode,
                 ScreensaverMode::Video(_) | ScreensaverMode::Stream(_)
-            );
+            ))
+            || (!p.mute_video
+                && p.shadertoy_sound_enabled
+                && matches!(&p.mode, ScreensaverMode::Shadertoy(path) if shadertoy_has_sound(path)));
         if wants_audio && !audio_assigned {
             audio_assigned = true;
         } else if wants_audio {
-            p.mute_video = true;
-            p.video_volume = 0;
+            if matches!(p.mode, ScreensaverMode::Video(_) | ScreensaverMode::Stream(_)) {
+                p.mute_video = true;
+                p.video_volume = 0;
+            } else {
+                p.shadertoy_sound_enabled = false;
+            }
         }
     }
 
@@ -1518,44 +1561,60 @@ fn disable_power_integration(state: &AppState) {
     }
 }
 
-fn request_screen_lock(profile: &SettingsProfile) {
-    if !profile.lock_screen_enabled {
-        return;
-    }
-    let (try_kde, try_gnome) = desktop::desktop_targets();
-    if !try_kde && !try_gnome {
-        return;
-    }
-    let conn = match DbusConnection::session() {
-        Ok(conn) => conn,
-        Err(err) => {
-            eprintln!("Lock screen: failed to connect to D-Bus: {}", err);
-            return;
-        }
-    };
+fn request_screen_lock() {
     let mut locked = false;
     let mut last_err = None;
 
-    if try_gnome {
-        if let Err(err) = lock_gnome_session(&conn) {
-            last_err = Some(err.to_string());
-        } else {
-            locked = true;
-        }
-        if !locked {
-            if let Err(err) = lock_gnome_screensaver(&conn) {
-                last_err = Some(err.to_string());
-            } else {
-                locked = true;
+    if let Ok(conn) = DbusConnection::system() {
+        match lock_logind(&conn) {
+            Ok(()) => locked = true,
+            Err(err) => {
+                if !is_dbus_target_missing(err.as_ref()) {
+                    last_err = Some(err.to_string());
+                }
             }
         }
     }
 
     if !locked {
-        if let Err(err) = lock_freedesktop(&conn) {
-            last_err = Some(err.to_string());
-        } else {
-            locked = true;
+        let conn = match DbusConnection::session() {
+            Ok(conn) => conn,
+            Err(err) => {
+                eprintln!("Lock screen: failed to connect to session D-Bus: {}", err);
+                return;
+            }
+        };
+
+        // Prefer the generic interface first: it is implemented by both KDE and GNOME on many systems.
+        match lock_freedesktop(&conn) {
+            Ok(()) => locked = true,
+            Err(err) => {
+                if !is_dbus_target_missing(err.as_ref()) {
+                    last_err = Some(err.to_string());
+                }
+            }
+        }
+
+        if !locked {
+            match lock_gnome_session(&conn) {
+                Ok(()) => locked = true,
+                Err(err) => {
+                    if !is_dbus_target_missing(err.as_ref()) {
+                        last_err = Some(err.to_string());
+                    }
+                }
+            }
+        }
+
+        if !locked {
+            match lock_gnome_screensaver(&conn) {
+                Ok(()) => locked = true,
+                Err(err) => {
+                    if !is_dbus_target_missing(err.as_ref()) {
+                        last_err = Some(err.to_string());
+                    }
+                }
+            }
         }
     }
 
@@ -1566,6 +1625,40 @@ fn request_screen_lock(profile: &SettingsProfile) {
             eprintln!("Lock screen: no compatible interface found");
         }
     }
+}
+
+fn lock_logind(conn: &DbusConnection) -> Result<(), Box<dyn std::error::Error>> {
+    let proxy = DbusProxy::new(
+        conn,
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+    )?;
+    if let Ok(session_id) = std::env::var("XDG_SESSION_ID") {
+        let _: () = proxy.call("LockSession", &(session_id.as_str(),))?;
+        Ok(())
+    } else {
+        let _: () = proxy.call("LockSessions", &())?;
+        Ok(())
+    }
+}
+
+fn is_dbus_target_missing(err: &(dyn std::error::Error + 'static)) -> bool {
+    let Some(err) = err.downcast_ref::<zbus::Error>() else {
+        return false;
+    };
+    matches!(
+        err,
+        zbus::Error::MethodError(name, _, _)
+            if matches!(
+                name.as_str(),
+                "org.freedesktop.DBus.Error.ServiceUnknown"
+                    | "org.freedesktop.DBus.Error.NameHasNoOwner"
+                    | "org.freedesktop.DBus.Error.UnknownObject"
+                    | "org.freedesktop.DBus.Error.UnknownInterface"
+                    | "org.freedesktop.DBus.Error.UnknownMethod"
+            )
+    )
 }
 
 fn gnome_inhibit(conn: &DbusConnection) -> Result<u32, Box<dyn std::error::Error>> {
@@ -1943,6 +2036,46 @@ fn shadertoy_has_buffers(path: &str) -> bool {
             .map(|c| c.to_ascii_lowercase())
             .collect();
         if matches!(key.as_str(), "buffera" | "bufferb" | "bufferc" | "bufferd") {
+            return true;
+        }
+    }
+    false
+}
+
+fn shadertoy_has_sound(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() {
+        return false;
+    }
+    let p = std::path::Path::new(path);
+    let dir = if p.is_dir() {
+        p
+    } else {
+        p.parent().unwrap_or_else(|| std::path::Path::new("."))
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !matches!(ext.as_str(), "glsl" | "frag" | "fs") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let key: String = stem
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        if key == "sound" {
             return true;
         }
     }

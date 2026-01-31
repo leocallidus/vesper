@@ -19,6 +19,7 @@ Multi-pass Shadertoy setups are supported in this format:
 - `Common.glsl` (optional) — shared code (functions/constants) included into all passes
 - `Image.glsl` (required) — final pass
 - `BufferA.glsl` / `BufferB.glsl` / `BufferC.glsl` / `BufferD.glsl` (optional)
+- `Sound.glsl` (optional) — audio pass (`mainSound`)
 
 Put the files in the same folder and select **`Image.glsl`** in the settings.
 The engine will auto-detect buffers next to it and run up to **4 buffers + Image**.
@@ -27,6 +28,19 @@ Notes:
 - `iChannel0..3` are mapped as `BufferA..BufferD`.
 - Buffers support simple feedback (buffer sampling itself uses the previous frame).
 - `Common.glsl` should be a snippet (no `#version` line).
+
+## Sound.glsl (audio)
+
+If the folder contains `Sound.glsl` with a Shadertoy-style function:
+
+```glsl
+vec2 mainSound(in int samp, float time)
+{
+    // return (L, R) samples in range [-1..1]
+}
+```
+
+Vesper can play it. The toggle is in **Settings → Content → GLSL шейдер → “Звук шейдера”**.
 
 ## Supported format (Shadertoy-style)
 

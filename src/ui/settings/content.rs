@@ -5,13 +5,15 @@ use crate::config::{
 use crate::i18n::{tr, Language};
 use crate::ui::settings::appearance::{apply_clock_position, apply_clock_size, format_clock_text};
 use gdk4::RGBA;
+use gdk_pixbuf::Pixbuf;
 use gtk4::cairo;
 use gtk4::prelude::Cast;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Button, ColorDialog, ColorDialogButton, ContentFit, DrawingArea, Frame, GraphicsOffload,
     GraphicsOffloadEnabled, IconLookupFlags, IconTheme, Label, ListBox, MediaControls, MediaFile,
-    Orientation, Picture, SelectionMode, Stack, Switch, TextDirection, Video, Widget,
+    Orientation, Picture, SelectionMode, SignalListItemFactory, Stack, Switch, TextDirection,
+    Video, Widget,
 };
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -46,11 +48,25 @@ pub struct ContentWidgets {
     pub web_url_row: adw::EntryRow,
     pub web_interaction_switch: Switch,
     pub stream_url_row: adw::EntryRow,
+    pub shadertoy_source_row: adw::ComboRow,
+    pub shadertoy_source_model: gtk4::StringList,
+    pub shadertoy_pack_row: adw::ComboRow,
+    pub shadertoy_pack_model: gtk4::StringList,
+    pub shadertoy_shader_row: adw::ComboRow,
+    pub shadertoy_shader_model: gtk4::StringList,
+    pub shadertoy_packs: Rc<RefCell<Vec<crate::shaderpacks::Shaderpack>>>,
+    pub shadertoy_manual_path: Rc<RefCell<Option<String>>>,
     pub file_row: adw::ActionRow,
     pub file_button: Button,
     pub file_info_row: adw::ActionRow,
     pub shader_check_row: adw::ActionRow,
     pub shader_check_button: Button,
+    pub shadertoy_interaction_row: adw::ActionRow,
+    pub shadertoy_interaction_switch: Switch,
+    pub shadertoy_hide_cursor_row: adw::ActionRow,
+    pub shadertoy_hide_cursor_switch: Switch,
+    pub shadertoy_sound_row: adw::ActionRow,
+    pub shadertoy_sound_switch: Switch,
     pub slideshow_interval_row: adw::ActionRow,
     pub mute_row: adw::ActionRow,
     pub volume_row: adw::ActionRow,
@@ -332,6 +348,39 @@ pub fn build_content_group(config: &Config, lang: Language) -> ContentWidgets {
         config.active_profile().mode,
         ScreensaverMode::Stream(_)
     ));
+
+    let shadertoy_source_model =
+        gtk4::StringList::new(&[tr(lang, "Файл/папка"), tr(lang, "Шейдерпак")]);
+    let shadertoy_source_row = adw::ComboRow::builder()
+        .title(tr(lang, "Источник"))
+        .model(&shadertoy_source_model)
+        .build();
+    shadertoy_source_row.set_visible(initial_mode_idx == 9);
+
+    let shadertoy_pack_model = gtk4::StringList::new(&[]);
+    let shadertoy_pack_row = adw::ComboRow::builder()
+        .title(tr(lang, "Шейдерпак"))
+        .model(&shadertoy_pack_model)
+        .build();
+    shadertoy_pack_row.set_visible(false);
+
+    let shadertoy_shader_model = gtk4::StringList::new(&[]);
+    let shadertoy_shader_row = adw::ComboRow::builder()
+        .title(tr(lang, "Шейдер"))
+        .model(&shadertoy_shader_model)
+        .build();
+    shadertoy_shader_row.set_visible(false);
+
+    let shadertoy_packs: Rc<RefCell<Vec<crate::shaderpacks::Shaderpack>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let shadertoy_manual_path: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
+    install_shaderpack_previews_in_dropdowns(
+        &shadertoy_pack_row,
+        &shadertoy_shader_row,
+        shadertoy_packs.clone(),
+    );
+
     let file_row = adw::ActionRow::builder()
         .title(tr(lang, "Путь к файлу"))
         .build();
@@ -343,11 +392,45 @@ pub fn build_content_group(config: &Config, lang: Language) -> ContentWidgets {
         .build();
     let shader_check_row = adw::ActionRow::builder()
         .title(tr(lang, "Проверить шейдеры"))
-        .subtitle(tr(lang, "Показать найденные BufferA-D"))
+        .subtitle(tr(lang, "Показать найденные BufferA-D + Common + Sound"))
         .build();
     shader_check_row.set_visible(initial_mode_idx == 9);
     let shader_check_button = Button::with_label(tr(lang, "Проверить"));
     shader_check_row.add_suffix(&shader_check_button);
+
+    let shadertoy_interaction_row = adw::ActionRow::builder()
+        .title(tr(lang, "Интерактивный шейдер"))
+        .subtitle(tr(lang, "Разрешить управление мышью (закрытие только с клавиатуры)"))
+        .build();
+    shadertoy_interaction_row.set_visible(initial_mode_idx == 9);
+    let shadertoy_interaction_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(config.active_profile().shadertoy_interaction_enabled)
+        .build();
+    shadertoy_interaction_row.add_suffix(&shadertoy_interaction_switch);
+
+    let shadertoy_hide_cursor_row = adw::ActionRow::builder()
+        .title(tr(lang, "Скрывать курсор"))
+        .subtitle(tr(lang, "Скрыть курсор в интерактивном шейдере"))
+        .build();
+    shadertoy_hide_cursor_row.set_visible(initial_mode_idx == 9);
+    let shadertoy_hide_cursor_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(config.active_profile().shadertoy_hide_cursor)
+        .build();
+    shadertoy_hide_cursor_row.add_suffix(&shadertoy_hide_cursor_switch);
+
+    let shadertoy_sound_row = adw::ActionRow::builder()
+        .title(tr(lang, "Звук шейдера"))
+        .subtitle("Sound.glsl")
+        .build();
+    shadertoy_sound_row.set_visible(false);
+    let shadertoy_sound_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(config.active_profile().shadertoy_sound_enabled)
+        .build();
+    shadertoy_sound_row.add_suffix(&shadertoy_sound_switch);
+
     let slideshow_interval_spin = gtk4::SpinButton::with_range(1.0, 3600.0, 1.0);
     slideshow_interval_spin.set_value(config.active_profile().slideshow_interval_seconds as f64);
     let slideshow_interval_row = adw::ActionRow::builder()
@@ -396,9 +479,15 @@ pub fn build_content_group(config: &Config, lang: Language) -> ContentWidgets {
     media_list_row.set_visible(list_visible);
     media_list_box.set_visible(list_visible);
     file_group.add(&stream_url_row);
+    file_group.add(&shadertoy_source_row);
+    file_group.add(&shadertoy_pack_row);
+    file_group.add(&shadertoy_shader_row);
     file_group.add(&file_row);
     file_group.add(&file_info_row);
     file_group.add(&shader_check_row);
+    file_group.add(&shadertoy_interaction_row);
+    file_group.add(&shadertoy_hide_cursor_row);
+    file_group.add(&shadertoy_sound_row);
     file_group.add(&slideshow_interval_row);
     file_group.add(&mute_row);
     file_group.add(&volume_row);
@@ -445,11 +534,25 @@ pub fn build_content_group(config: &Config, lang: Language) -> ContentWidgets {
         web_url_row,
         web_interaction_switch,
         stream_url_row,
+        shadertoy_source_row,
+        shadertoy_source_model,
+        shadertoy_pack_row,
+        shadertoy_pack_model,
+        shadertoy_shader_row,
+        shadertoy_shader_model,
+        shadertoy_packs,
+        shadertoy_manual_path,
         file_row,
         file_button,
         file_info_row,
         shader_check_row,
         shader_check_button,
+        shadertoy_interaction_row,
+        shadertoy_interaction_switch,
+        shadertoy_hide_cursor_row,
+        shadertoy_hide_cursor_switch,
+        shadertoy_sound_row,
+        shadertoy_sound_switch,
         slideshow_interval_row,
         mute_row,
         volume_row,
@@ -687,6 +790,7 @@ pub fn format_file_size(bytes: u64, lang: Language) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn hash_u32(x: u32) -> u32 {
     let mut x = x;
     x = ((x >> 16) ^ x).wrapping_mul(0x45d9f3b);
@@ -694,10 +798,12 @@ pub fn hash_u32(x: u32) -> u32 {
     (x >> 16) ^ x
 }
 
+#[allow(dead_code)]
 pub fn hash_f64(x: u32) -> f64 {
     (hash_u32(x) as f64) / (u32::MAX as f64)
 }
 
+#[allow(dead_code)]
 pub fn draw_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -740,6 +846,7 @@ pub fn draw_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn apply_theme(r: f64, g: f64, b: f64, theme: PatternTheme) -> (f64, f64, f64) {
     match theme {
         PatternTheme::Default => (r, g, b),
@@ -766,6 +873,7 @@ fn apply_theme(r: f64, g: f64, b: f64, theme: PatternTheme) -> (f64, f64, f64) {
     }
 }
 
+#[allow(dead_code)]
 fn draw_matrix_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -808,6 +916,7 @@ fn draw_matrix_pattern(
         }
     }
 }
+#[allow(dead_code)]
 fn draw_stars_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -845,6 +954,7 @@ fn draw_stars_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_geometry_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -897,6 +1007,7 @@ fn draw_geometry_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_flowfield_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -959,6 +1070,7 @@ fn draw_flowfield_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_aurora_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1025,6 +1137,7 @@ fn draw_aurora_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_plasma_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1076,6 +1189,7 @@ fn draw_plasma_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_bokeh_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1135,6 +1249,7 @@ fn draw_bokeh_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_constellation_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1208,6 +1323,7 @@ fn draw_constellation_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_lissajous_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1274,6 +1390,7 @@ fn draw_lissajous_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_waves_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1339,6 +1456,7 @@ fn draw_waves_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_voronoi_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1420,6 +1538,7 @@ fn draw_voronoi_pattern(
     }
 }
 
+#[allow(dead_code)]
 fn draw_scanline_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1478,6 +1597,7 @@ fn draw_scanline_pattern(
     let _ = cr.fill();
 }
 
+#[allow(dead_code)]
 fn draw_fireflies_pattern(
     cr: &cairo::Context,
     width: f64,
@@ -1542,12 +1662,251 @@ fn draw_fireflies_pattern(
     }
 }
 
+fn install_shaderpack_previews_in_dropdowns(
+    shadertoy_pack_row: &adw::ComboRow,
+    shadertoy_shader_row: &adw::ComboRow,
+    shadertoy_packs: Rc<RefCell<Vec<crate::shaderpacks::Shaderpack>>>,
+) {
+    // Pack dropdown: show shaderpacklogo.png (required by format).
+    let pack_factory = SignalListItemFactory::new();
+    pack_factory.connect_setup(|_, obj| {
+        let Some(list_item) = obj.downcast_ref::<gtk4::ListItem>() else {
+            return;
+        };
+        let row = gtk4::Box::new(Orientation::Horizontal, 8);
+        row.set_margin_top(4);
+        row.set_margin_bottom(4);
+
+        let picture = Picture::new();
+        picture.set_content_fit(ContentFit::Contain);
+        picture.set_can_shrink(true);
+        picture.set_size_request(28, 28);
+        picture.set_halign(Align::Center);
+        picture.set_valign(Align::Center);
+        picture.set_paintable(None::<&gdk4::Texture>);
+
+        let label = Label::new(None);
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+
+        row.append(&picture);
+        row.append(&label);
+
+        list_item.set_child(Some(&row));
+    });
+    pack_factory.connect_bind({
+        let shadertoy_packs = shadertoy_packs.clone();
+        move |_, obj| {
+            let Some(list_item) = obj.downcast_ref::<gtk4::ListItem>() else {
+                return;
+            };
+            let Some(row) = list_item.child().and_then(|w| w.downcast::<gtk4::Box>().ok())
+            else {
+                return;
+            };
+            let Some(picture) = row.first_child().and_then(|w| w.downcast::<Picture>().ok())
+            else {
+                return;
+            };
+            let Some(label) = picture
+                .next_sibling()
+                .and_then(|w| w.downcast::<Label>().ok())
+            else {
+                return;
+            };
+
+            let title_from_model = list_item
+                .item()
+                .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
+                .map(|s| s.string().to_string())
+                .unwrap_or_default();
+
+            let pack_name = title_from_model.trim();
+            let pack_idx = list_item.position() as usize;
+            let packs = shadertoy_packs.borrow();
+            // `ComboRow` uses the same factory for both the dropdown list and the selected item.
+            // In the selected-item case, `list_item.position()` can be `0` even when a different
+            // pack is selected, so prefer resolving by displayed name.
+            let pack = packs
+                .iter()
+                .find(|p| p.name.trim() == pack_name)
+                .or_else(|| packs.get(pack_idx));
+            if let Some(pack) = pack {
+                label.set_text(pack.name.trim());
+                set_picture_scaled_or_filename(&picture, &pack.logo_path, 56, 56);
+            } else {
+                label.set_text(pack_name);
+                picture.set_file(None::<&gio::File>);
+                picture.set_paintable(None::<&gdk4::Texture>);
+            }
+        }
+    });
+    shadertoy_pack_row.set_factory(Some(&pack_factory));
+    shadertoy_pack_row.set_list_factory(Some(&pack_factory));
+
+    // Shader dropdown: show preview.png if present in shader entry dir.
+    let shader_factory = SignalListItemFactory::new();
+    shader_factory.connect_setup(|_, obj| {
+        let Some(list_item) = obj.downcast_ref::<gtk4::ListItem>() else {
+            return;
+        };
+        let row = gtk4::Box::new(Orientation::Horizontal, 8);
+        row.set_margin_top(4);
+        row.set_margin_bottom(4);
+
+        // Thumbnail placeholder: either preview.png, or a live mini-render of the shader.
+        let thumb_stack = gtk4::Stack::new();
+        thumb_stack.set_size_request(56, 32);
+
+        let picture = Picture::new();
+        picture.set_content_fit(ContentFit::Contain);
+        picture.set_can_shrink(true);
+        picture.set_halign(Align::Center);
+        picture.set_valign(Align::Center);
+        picture.set_paintable(None::<&gdk4::Texture>);
+        thumb_stack.add_named(&picture, Some("png"));
+
+        let live_box = gtk4::Box::new(Orientation::Horizontal, 0);
+        live_box.set_halign(Align::Center);
+        live_box.set_valign(Align::Center);
+        thumb_stack.add_named(&live_box, Some("live"));
+        thumb_stack.set_visible_child_name("png");
+
+        let label = Label::new(None);
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+
+        row.append(&thumb_stack);
+        row.append(&label);
+
+        list_item.set_child(Some(&row));
+    });
+    shader_factory.connect_bind({
+        let shadertoy_packs = shadertoy_packs.clone();
+        let shadertoy_pack_row = shadertoy_pack_row.clone();
+        move |_, obj| {
+            let Some(list_item) = obj.downcast_ref::<gtk4::ListItem>() else {
+                return;
+            };
+            let Some(row) = list_item.child().and_then(|w| w.downcast::<gtk4::Box>().ok())
+            else {
+                return;
+            };
+            let Some(thumb_stack) = row
+                .first_child()
+                .and_then(|w| w.downcast::<gtk4::Stack>().ok())
+            else {
+                return;
+            };
+            let Some(label) = thumb_stack
+                .next_sibling()
+                .and_then(|w| w.downcast::<Label>().ok())
+            else {
+                return;
+            };
+
+            let title_from_model = list_item
+                .item()
+                .and_then(|o| o.downcast::<gtk4::StringObject>().ok())
+                .map(|s| s.string().to_string())
+                .unwrap_or_default();
+            label.set_text(title_from_model.trim());
+
+            let pack_idx = shadertoy_pack_row.selected() as usize;
+            let shader_idx = list_item.position() as usize;
+            let packs = shadertoy_packs.borrow();
+            let shader_name = title_from_model.trim();
+            let shader = packs.get(pack_idx).and_then(|p| {
+                // `ComboRow` uses the same factory for both the dropdown list and the selected
+                // item. In the selected-item case, `list_item.position()` can be `0` even when a
+                // different shader is selected, so prefer resolving by displayed name.
+                p.shaders
+                    .iter()
+                    .find(|s| s.name.trim() == shader_name)
+                    .or_else(|| p.shaders.get(shader_idx))
+                    .cloned()
+            });
+
+            let Some(shader) = shader else {
+                thumb_stack.set_visible_child_name("png");
+                if let Some(picture) = thumb_stack.child_by_name("png").and_then(|w| w.downcast::<Picture>().ok()) {
+                    picture.set_file(None::<&gio::File>);
+                    picture.set_paintable(None::<&gdk4::Texture>);
+                }
+                if let Some(live_box) = thumb_stack.child_by_name("live").and_then(|w| w.downcast::<gtk4::Box>().ok()) {
+                    while let Some(child) = live_box.first_child() {
+                        live_box.remove(&child);
+                    }
+                }
+                return;
+            };
+
+            if let Some(path) = shader.preview_path.as_ref().filter(|p| p.is_file()) {
+                thumb_stack.set_visible_child_name("png");
+                if let Some(picture) = thumb_stack.child_by_name("png").and_then(|w| w.downcast::<Picture>().ok()) {
+                    set_picture_scaled_or_filename(&picture, path, 160, 90);
+                }
+                if let Some(live_box) = thumb_stack.child_by_name("live").and_then(|w| w.downcast::<gtk4::Box>().ok()) {
+                    while let Some(child) = live_box.first_child() {
+                        live_box.remove(&child);
+                    }
+                }
+            } else {
+                // Live thumbnail preview (static render; no continuous tick).
+                thumb_stack.set_visible_child_name("live");
+                if let Some(live_box) = thumb_stack.child_by_name("live").and_then(|w| w.downcast::<gtk4::Box>().ok()) {
+                    while let Some(child) = live_box.first_child() {
+                        live_box.remove(&child);
+                    }
+                    let shader_path = shader
+                        .detected
+                        .image
+                        .as_ref()
+                        .unwrap_or(&shader.dir)
+                        .to_string_lossy()
+                        .to_string();
+                    let area = crate::ui::shadertoy::build_shadertoy_thumbnail_area(&shader_path, 56, 32);
+                    live_box.append(&area);
+                }
+                if let Some(picture) = thumb_stack.child_by_name("png").and_then(|w| w.downcast::<Picture>().ok()) {
+                    picture.set_file(None::<&gio::File>);
+                    picture.set_paintable(None::<&gdk4::Texture>);
+                }
+            }
+        }
+    });
+    shadertoy_shader_row.set_factory(Some(&shader_factory));
+    shadertoy_shader_row.set_list_factory(Some(&shader_factory));
+}
+
 pub fn build_preview_placeholder(text: &str) -> gtk4::Widget {
     let label = Label::new(Some(text));
     label.add_css_class("dim-label");
     label.set_hexpand(true);
     label.set_vexpand(true);
     label.upcast()
+}
+
+fn configure_picture_for_preview(picture: &Picture) {
+    picture.set_content_fit(ContentFit::Contain);
+    picture.set_can_shrink(true);
+    picture.set_halign(Align::Center);
+    picture.set_valign(Align::Center);
+}
+
+fn set_picture_scaled_or_filename(picture: &Picture, path: &Path, max_w: i32, max_h: i32) {
+    // We prefer a pre-scaled paintable so oversized images don't force giant widget sizes.
+    match Pixbuf::from_file_at_scale(path, max_w, max_h, true) {
+        Ok(pixbuf) => {
+            let texture = gdk4::Texture::for_pixbuf(&pixbuf);
+            picture.set_file(None::<&gio::File>);
+            picture.set_paintable(Some(&texture));
+        }
+        Err(_) => {
+            picture.set_paintable(None::<&gdk4::Texture>);
+            picture.set_filename(Some(path));
+        }
+    }
 }
 
 pub fn build_preview_widget(
@@ -1567,6 +1926,8 @@ pub fn build_preview_widget(
     video_volume: u8,
     preview_paused: bool,
     preview_path: Option<&std::path::Path>,
+    shadertoy_preview_png: Option<&std::path::Path>,
+    shadertoy_interaction_enabled: bool,
     clock_enabled: bool,
     clock_two_lines: bool,
     clock_format: &str,
@@ -1711,12 +2072,13 @@ pub fn build_preview_widget(
             ) {
                 return (build_preview_placeholder(&msg), None, None);
             }
-            let file = gio::File::for_path(path);
             if mode == 4 {
-                let picture = Picture::for_file(&file);
-                picture.set_content_fit(ContentFit::Contain);
+                let picture = Picture::new();
+                configure_picture_for_preview(&picture);
+                set_picture_scaled_or_filename(&picture, &path, 720, 400);
                 (picture.upcast(), None, None)
             } else {
+                let file = gio::File::for_path(path);
                 let media = MediaFile::for_file(&file);
                 media.set_loop(true);
                 media.set_muted(mute_switch.is_active());
@@ -1749,8 +2111,11 @@ pub fn build_preview_widget(
                 return (build_preview_placeholder(&msg), None, None);
             }
             let images = collect_image_paths(&path);
-            let picture = Picture::for_file(&gio::File::for_path(&images[0]));
-            picture.set_content_fit(ContentFit::Contain);
+            let picture = Picture::new();
+            configure_picture_for_preview(&picture);
+            if let Some(first) = images.get(0) {
+                set_picture_scaled_or_filename(&picture, first, 720, 400);
+            }
             (picture.upcast(), None, None)
         }
         8 => {
@@ -1774,10 +2139,7 @@ pub fn build_preview_widget(
             )
         }
         9 => {
-            let path = preview_path
-                .map(|p| p.to_path_buf())
-                .or_else(|| file_row_path(file_row));
-            let Some(path) = path else {
+            let Some(path) = file_row_path(file_row) else {
                 return (
                     build_preview_placeholder(tr(lang, "Файл не выбран")),
                     None,
@@ -1787,11 +2149,27 @@ pub fn build_preview_widget(
             if let Err(msg) = validate_shadertoy_shader_path(&path, lang) {
                 return (build_preview_placeholder(&msg), None, None);
             }
-            (
-                build_preview_placeholder(tr(lang, "Предпросмотр не поддерживается")),
-                None,
-                None,
-            )
+            // If we have a static preview (shaderpack `preview.png`) and preview is paused, use it.
+            // Otherwise render a live GLSL preview via GLArea.
+            if preview_paused {
+                if let Some(png) = shadertoy_preview_png.filter(|p| p.is_file()) {
+                    let picture = Picture::new();
+                    configure_picture_for_preview(&picture);
+                    set_picture_scaled_or_filename(&picture, png, 720, 400);
+                    return (picture.upcast(), None, None);
+                }
+            }
+
+            let shader_path = path.to_string_lossy().to_string();
+            let area = crate::ui::shadertoy::build_shadertoy_area_with_options(
+                &shader_path,
+                PatternDensity::Low,
+                false,
+                0.0,
+                shadertoy_interaction_enabled,
+            );
+            area.set_can_focus(false);
+            (area.upcast(), None, None)
         }
         _ => (
             build_preview_placeholder(tr(lang, "Режим не поддерживается")),
@@ -2112,6 +2490,7 @@ pub struct ShadertoyDetectedFiles {
     pub common: Option<PathBuf>,
     pub image: Option<PathBuf>,
     pub buffers: [Option<PathBuf>; 4],
+    pub sound: Option<PathBuf>,
 }
 
 pub fn detect_shadertoy_files(selection: &Path) -> ShadertoyDetectedFiles {
@@ -2130,6 +2509,7 @@ pub fn detect_shadertoy_files(selection: &Path) -> ShadertoyDetectedFiles {
     let mut image: Option<PathBuf> = None;
     let mut common: Option<PathBuf> = None;
     let mut buffers: [Option<PathBuf>; 4] = [None, None, None, None];
+    let mut sound: Option<PathBuf> = None;
 
     if let Ok(rd) = std::fs::read_dir(&base_dir) {
         for entry in rd.flatten() {
@@ -2171,6 +2551,9 @@ pub fn detect_shadertoy_files(selection: &Path) -> ShadertoyDetectedFiles {
                 "bufferd" => {
                     buffers[3].get_or_insert(path);
                 }
+                "sound" => {
+                    sound.get_or_insert(path);
+                }
                 _ => {}
             }
         }
@@ -2195,6 +2578,7 @@ pub fn detect_shadertoy_files(selection: &Path) -> ShadertoyDetectedFiles {
         common,
         image,
         buffers,
+        sound,
     }
 }
 

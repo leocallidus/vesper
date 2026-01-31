@@ -2,7 +2,7 @@ use crate::i18n::{profile_name, Language};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const ACTION_START: &str = "start-screensaver";
 pub const ACTION_STOP: &str = "stop-screensaver";
@@ -17,6 +17,7 @@ pub const DEFAULT_TOTAL_RUNTIME_SECONDS: u64 = 0;
 pub const DEFAULT_POWER_INTEGRATION_ENABLED: bool = false;
 pub const DEFAULT_MPRIS_PAUSE_ENABLED: bool = true;
 pub const DEFAULT_START_MINIMIZED: bool = false;
+pub const DEFAULT_TRAY_ICON_ENABLED: bool = true;
 pub const DEFAULT_CLOCK_FORMAT: &str = "%H:%M:%S";
 pub const DEFAULT_CLOCK_TIME_FORMAT: &str = "%H:%M";
 pub const DEFAULT_CLOCK_DATE_FORMAT: &str = "%d.%m.%Y";
@@ -187,6 +188,12 @@ pub struct SettingsProfile {
     pub video_volume: u8,
     pub mode: ScreensaverMode,
     pub mute_video: bool,
+    #[serde(default = "default_shadertoy_sound_enabled")]
+    pub shadertoy_sound_enabled: bool,
+    #[serde(default = "default_shadertoy_interaction_enabled")]
+    pub shadertoy_interaction_enabled: bool,
+    #[serde(default = "default_shadertoy_hide_cursor")]
+    pub shadertoy_hide_cursor: bool,
     #[serde(default)]
     pub show_clock: bool,
     #[serde(default)]
@@ -241,6 +248,8 @@ pub struct SettingsProfile {
     pub power_integration_enabled: bool,
     #[serde(default = "default_lock_screen_enabled")]
     pub lock_screen_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrated_lock_screen_enabled: Option<bool>,
     #[serde(default = "default_mpris_pause_enabled")]
     pub mpris_pause_enabled: bool,
     #[serde(default)]
@@ -270,6 +279,9 @@ impl SettingsProfile {
             video_volume: default_video_volume(),
             mode: ScreensaverMode::Color("#000000".to_string()),
             mute_video: true,
+            shadertoy_sound_enabled: default_shadertoy_sound_enabled(),
+            shadertoy_interaction_enabled: default_shadertoy_interaction_enabled(),
+            shadertoy_hide_cursor: default_shadertoy_hide_cursor(),
             show_clock: false,
             show_now_playing: false,
             now_playing_position: default_now_playing_position(),
@@ -297,6 +309,7 @@ impl SettingsProfile {
             inhibit_sleep: false,
             power_integration_enabled: default_power_integration_enabled(),
             lock_screen_enabled: default_lock_screen_enabled(),
+            integrated_lock_screen_enabled: Some(default_integrated_lock_screen_enabled()),
             mpris_pause_enabled: default_mpris_pause_enabled(),
             app_inhibit_list: Vec::new(),
             panel_commands: Vec::new(),
@@ -335,6 +348,8 @@ pub struct Config {
     pub language: Language,
     #[serde(default = "default_start_minimized")]
     pub start_minimized: bool,
+    #[serde(default = "default_tray_icon_enabled")]
+    pub tray_icon_enabled: bool,
     #[serde(default)]
     pub settings_window: Option<WindowGeometry>,
     #[serde(default = "default_hotkey_start")]
@@ -357,6 +372,7 @@ impl Default for Config {
             monitor_profile_overrides: Vec::new(),
             language: default_language(),
             start_minimized: default_start_minimized(),
+            tray_icon_enabled: default_tray_icon_enabled(),
             settings_window: None,
             hotkey_start: default_hotkey_start(),
             hotkey_stop: default_hotkey_stop(),
@@ -391,6 +407,10 @@ fn default_start_minimized() -> bool {
     DEFAULT_START_MINIMIZED
 }
 
+fn default_tray_icon_enabled() -> bool {
+    DEFAULT_TRAY_ICON_ENABLED
+}
+
 fn default_total_runtime_seconds() -> u64 {
     DEFAULT_TOTAL_RUNTIME_SECONDS
 }
@@ -403,12 +423,20 @@ fn default_video_volume() -> u8 {
     DEFAULT_VIDEO_VOLUME
 }
 
+fn default_shadertoy_sound_enabled() -> bool {
+    true
+}
+
 fn default_power_integration_enabled() -> bool {
     DEFAULT_POWER_INTEGRATION_ENABLED
 }
 
 fn default_lock_screen_enabled() -> bool {
     crate::desktop::is_kde_or_gnome()
+}
+
+fn default_integrated_lock_screen_enabled() -> bool {
+    false
 }
 
 fn default_mpris_pause_enabled() -> bool {
@@ -421,6 +449,14 @@ fn default_clock_format() -> String {
 
 fn default_web_interaction_enabled() -> bool {
     DEFAULT_WEB_INTERACTION_ENABLED
+}
+
+fn default_shadertoy_interaction_enabled() -> bool {
+    false
+}
+
+fn default_shadertoy_hide_cursor() -> bool {
+    false
 }
 
 fn default_clock_time_format() -> String {
@@ -521,7 +557,8 @@ impl Config {
             }
         }
 
-        let default_config = Self::default();
+        let mut default_config = Self::default();
+        default_config.normalize();
         let _ = default_config.save();
         default_config
     }
@@ -642,6 +679,29 @@ impl Config {
             .sort_by(|a, b| a.monitor_id.cmp(&b.monitor_id));
         self.monitor_profile_overrides
             .dedup_by(|a, b| a.monitor_id == b.monitor_id);
+
+        // Keep legacy `lock_screen_enabled` and the newer `integrated_lock_screen_enabled`
+        // consistent. If the new field is missing (old config), migrate it from the legacy one.
+        for profile in &mut self.profiles {
+            let lock_enabled = profile
+                .integrated_lock_screen_enabled
+                .unwrap_or(profile.lock_screen_enabled);
+            profile.integrated_lock_screen_enabled = Some(lock_enabled);
+            profile.lock_screen_enabled = lock_enabled;
+        }
+    }
+
+    pub fn clear_shadertoy_paths_under(&mut self, root: &Path) -> usize {
+        let mut cleared = 0usize;
+        for profile in &mut self.profiles {
+            if let ScreensaverMode::Shadertoy(path) = &mut profile.mode {
+                if is_path_under_root(path, root) {
+                    *path = String::new();
+                    cleared += 1;
+                }
+            }
+        }
+        cleared
     }
 
     fn from_legacy(legacy: LegacyConfig) -> Self {
@@ -656,6 +716,9 @@ impl Config {
             video_volume: default_video_volume(),
             mode: legacy.mode,
             mute_video: legacy.mute_video,
+            shadertoy_sound_enabled: default_shadertoy_sound_enabled(),
+            shadertoy_interaction_enabled: default_shadertoy_interaction_enabled(),
+            shadertoy_hide_cursor: default_shadertoy_hide_cursor(),
             show_clock: false,
             show_now_playing: false,
             now_playing_position: default_now_playing_position(),
@@ -683,6 +746,7 @@ impl Config {
             inhibit_sleep: legacy.inhibit_sleep,
             power_integration_enabled: default_power_integration_enabled(),
             lock_screen_enabled: default_lock_screen_enabled(),
+            integrated_lock_screen_enabled: Some(default_integrated_lock_screen_enabled()),
             mpris_pause_enabled: default_mpris_pause_enabled(),
             app_inhibit_list: Vec::new(),
             panel_commands: legacy.panel_commands,
@@ -699,6 +763,7 @@ impl Config {
             monitor_profile_overrides: Vec::new(),
             language: default_language(),
             start_minimized: default_start_minimized(),
+            tray_icon_enabled: default_tray_icon_enabled(),
             settings_window: legacy.settings_window,
             hotkey_start: legacy.hotkey_start,
             hotkey_stop: legacy.hotkey_stop,
@@ -750,6 +815,17 @@ impl Config {
                 .join("config.json")
         }
     }
+}
+
+fn is_path_under_root(path_str: &str, root: &Path) -> bool {
+    if path_str.trim().is_empty() {
+        return false;
+    }
+    let path = Path::new(path_str);
+    if let Ok(canon) = path.canonicalize() {
+        return canon.starts_with(root);
+    }
+    path.starts_with(root)
 }
 
 fn default_profile_name(index: usize) -> String {

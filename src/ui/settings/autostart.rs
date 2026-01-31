@@ -9,6 +9,7 @@ pub struct AutostartWidgets {
     pub group: adw::PreferencesGroup,
     pub autostart_switch: Switch,
     pub start_minimized_switch: Switch,
+    pub tray_icon_switch: Switch,
 }
 
 pub fn build_autostart_group(config: &Config, lang: Language) -> AutostartWidgets {
@@ -38,9 +39,21 @@ pub fn build_autostart_group(config: &Config, lang: Language) -> AutostartWidget
     start_minimized_row.add_suffix(&start_minimized_switch);
     group.add(&start_minimized_row);
 
+    let tray_icon_row = adw::ActionRow::builder()
+        .title(tr(lang, "Показывать значок в трее"))
+        .subtitle(tr(lang, "Отображать иконку в системном трее"))
+        .build();
+    let tray_icon_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(config.tray_icon_enabled)
+        .build();
+    tray_icon_row.add_suffix(&tray_icon_switch);
+    group.add(&tray_icon_row);
+
     AutostartWidgets {
         group,
         autostart_switch,
         start_minimized_switch,
+        tray_icon_switch,
     }
 }

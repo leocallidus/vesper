@@ -1,19 +1,32 @@
 use crate::config::PatternDensity;
 use glow::HasContext;
 use gtk4::prelude::*;
-use gtk4::{EventControllerMotion, GLArea};
+use gtk4::{EventControllerMotion, GestureClick, GLArea};
+use std::io::Write;
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::rc::Rc;
 use std::time::Instant;
 
 const SHADER_CHANNELS: usize = 4;
+const SOUND_SAMPLE_RATE: f32 = 44_100.0;
+const SOUND_BLOCK_SAMPLES: i32 = 2048;
+const SOUND_AHEAD_SECONDS: f32 = 0.5;
+
+#[derive(Clone, Copy, Default)]
+struct MouseState {
+    pos: Option<(f32, f32)>,
+    last_press: Option<(f32, f32)>,
+    pressed: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SamplerKind {
     Tex2D,
     Cube,
+    #[allow(dead_code)]
     Tex3D,
 }
 
@@ -36,6 +49,9 @@ struct ShadertoyResources {
     gl: glow::Context,
     image: ShadertoyProgram,
     buffers: [Option<ShadertoyProgram>; SHADER_CHANNELS],
+    external_channels: [Option<ExternalChannel>; SHADER_CHANNELS],
+    noise_tex: glow::NativeTexture,
+    sound: Option<SoundState>,
     blit_program: glow::NativeProgram,
     vao: glow::NativeVertexArray,
     black_tex: glow::NativeTexture,
@@ -51,11 +67,125 @@ struct ShadertoyResources {
     frame: i32,
 }
 
-pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLArea {
+#[derive(Clone)]
+struct ExternalChannel {
+    tex: glow::NativeTexture,
+    size: (i32, i32),
+}
+
+struct SoundProgram {
+    program: glow::NativeProgram,
+    uniforms: Uniforms,
+    channel_kinds: [SamplerKind; SHADER_CHANNELS],
+    u_sample_rate: Option<glow::NativeUniformLocation>,
+    u_block_offset: Option<glow::NativeUniformLocation>,
+}
+
+struct SoundState {
+    program: SoundProgram,
+    fbo: glow::NativeFramebuffer,
+    tex: glow::NativeTexture,
+    pixels: Vec<f32>,
+    bytes: Vec<u8>,
+    next_sample: i32,
+    block_index: i32,
+    volume: f32,
+    backend: SoundBackend,
+}
+
+enum SoundBackend {
+    PwCat(Child),
+    PaPlay(Child),
+}
+
+impl SoundBackend {
+    fn kind_name(&self) -> &'static str {
+        match self {
+            SoundBackend::PwCat(_) => "pw-cat",
+            SoundBackend::PaPlay(_) => "paplay",
+        }
+    }
+
+    fn is_pw_cat(&self) -> bool {
+        matches!(self, SoundBackend::PwCat(_))
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        match self {
+            SoundBackend::PwCat(c) | SoundBackend::PaPlay(c) => c.try_wait(),
+        }
+    }
+
+    fn stdin_mut(&mut self) -> Option<&mut ChildStdin> {
+        match self {
+            SoundBackend::PwCat(c) | SoundBackend::PaPlay(c) => c.stdin.as_mut(),
+        }
+    }
+
+    fn kill_and_wait(&mut self) {
+        let _ = match self {
+            SoundBackend::PwCat(c) | SoundBackend::PaPlay(c) => c.kill(),
+        };
+        let _ = match self {
+            SoundBackend::PwCat(c) | SoundBackend::PaPlay(c) => c.wait(),
+        };
+    }
+}
+
+#[allow(dead_code)]
+pub fn build_shadertoy_area(
+    shader_path: &str,
+    density: PatternDensity,
+    enable_sound: bool,
+    sound_volume: f32,
+) -> GLArea {
+    build_shadertoy_area_inner(shader_path, density, enable_sound, sound_volume, true, true)
+}
+
+pub fn build_shadertoy_area_with_options(
+    shader_path: &str,
+    density: PatternDensity,
+    enable_sound: bool,
+    sound_volume: f32,
+    enable_mouse: bool,
+) -> GLArea {
+    build_shadertoy_area_inner(
+        shader_path,
+        density,
+        enable_sound,
+        sound_volume,
+        true,
+        enable_mouse,
+    )
+}
+
+pub fn build_shadertoy_thumbnail_area(shader_path: &str, width: i32, height: i32) -> GLArea {
+    let area = build_shadertoy_area_inner(
+        shader_path,
+        PatternDensity::Low,
+        false,
+        0.0,
+        false,
+        false,
+    );
+    area.set_size_request(width.max(1), height.max(1));
+    area.set_hexpand(false);
+    area.set_vexpand(false);
+    area
+}
+
+fn build_shadertoy_area_inner(
+    shader_path: &str,
+    density: PatternDensity,
+    enable_sound: bool,
+    sound_volume: f32,
+    continuous_render: bool,
+    enable_mouse: bool,
+) -> GLArea {
     let gl_area = GLArea::new();
     gl_area.set_hexpand(true);
     gl_area.set_vexpand(true);
-    gl_area.set_auto_render(false);
+    gl_area.set_auto_render(!continuous_render);
     gl_area.set_has_depth_buffer(false);
     gl_area.set_has_stencil_buffer(false);
     #[allow(deprecated)]
@@ -63,28 +193,51 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
     gl_area.set_required_version(3, 3);
 
     let shader_path = shader_path.trim().to_string();
+    let sound_volume = sound_volume.clamp(0.0, 1.0);
     let resources: Rc<RefCell<Option<ShadertoyResources>>> = Rc::new(RefCell::new(None));
 
-    let mouse_pos: Rc<RefCell<Option<(f32, f32)>>> = Rc::new(RefCell::new(None));
-    {
-        let mouse_pos = mouse_pos.clone();
+    let mouse_state: Rc<RefCell<MouseState>> = Rc::new(RefCell::new(MouseState::default()));
+    if enable_mouse {
+        let mouse_state_for_motion = mouse_state.clone();
         let gl_area_for_scale = gl_area.clone();
         let controller = EventControllerMotion::new();
         controller.connect_motion(move |_, x, y| {
             let scale = gl_area_for_scale.scale_factor().max(1) as f32;
-            *mouse_pos.borrow_mut() = Some((x as f32 * scale, y as f32 * scale));
+            mouse_state_for_motion
+                .borrow_mut()
+                .pos
+                .replace((x as f32 * scale, y as f32 * scale));
         });
         gl_area.add_controller(controller);
+
+        let mouse_state_for_press = mouse_state.clone();
+        let gl_area_for_scale = gl_area.clone();
+        let click = GestureClick::new();
+        click.connect_pressed(move |_, _n_press, x, y| {
+            let scale = gl_area_for_scale.scale_factor().max(1) as f32;
+            let mut state = mouse_state_for_press.borrow_mut();
+            state.pressed = true;
+            state.last_press = Some((x as f32 * scale, y as f32 * scale));
+        });
+        let mouse_state_for_release = mouse_state.clone();
+        click.connect_released(move |_, _n_press, _x, _y| {
+            mouse_state_for_release.borrow_mut().pressed = false;
+        });
+        gl_area.add_controller(click);
     }
 
-    gl_area.add_tick_callback(|widget, _frame_clock| {
-        widget.queue_render();
-        glib::ControlFlow::Continue
-    });
+    if continuous_render {
+        gl_area.add_tick_callback(|widget, _frame_clock| {
+            widget.queue_render();
+            glib::ControlFlow::Continue
+        });
+    }
 
     {
         let resources = resources.clone();
         let shader_path = shader_path.clone();
+        let enable_sound = enable_sound;
+        let sound_volume = sound_volume;
         gl_area.connect_realize(move |area| {
             area.make_current();
             if area.error().is_some() {
@@ -213,11 +366,29 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                 }
             };
 
+            let noise_tex = match unsafe { create_noise_texture(&gl) } {
+                Ok(t) => t,
+                Err(err) => {
+                    eprintln!("Shadertoy GL init failed: create noise texture: {err}");
+                    unsafe {
+                        gl.delete_texture(black_tex);
+                        gl.delete_vertex_array(vao);
+                        gl.delete_program(blit_program);
+                        gl.delete_program(image_program);
+                        for prog in buffers.iter().flatten() {
+                            gl.delete_program(prog.program);
+                        }
+                    }
+                    return;
+                }
+            };
+
             let black_cube_tex = match unsafe { create_black_cubemap_texture(&gl) } {
                 Ok(t) => t,
                 Err(err) => {
                     eprintln!("Shadertoy GL init failed: create cubemap texture: {err}");
                     unsafe {
+                        gl.delete_texture(noise_tex);
                         gl.delete_texture(black_tex);
                         gl.delete_vertex_array(vao);
                         gl.delete_program(blit_program);
@@ -236,6 +407,7 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     eprintln!("Shadertoy GL init failed: create 3d texture: {err}");
                     unsafe {
                         gl.delete_texture(black_cube_tex);
+                        gl.delete_texture(noise_tex);
                         gl.delete_texture(black_tex);
                         gl.delete_vertex_array(vao);
                         gl.delete_program(blit_program);
@@ -255,6 +427,7 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     unsafe {
                         gl.delete_texture(black_3d_tex);
                         gl.delete_texture(black_cube_tex);
+                        gl.delete_texture(noise_tex);
                         gl.delete_texture(black_tex);
                         gl.delete_vertex_array(vao);
                         gl.delete_program(blit_program);
@@ -267,6 +440,20 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                 }
             };
 
+            let external_channels = unsafe { load_external_channels(&gl, &set.asset_channels) };
+
+            let sound = if enable_sound {
+                set.sound_path.as_ref().and_then(|sound_path| {
+                    init_sound_state(&gl, common_src.as_deref(), sound_path, sound_volume)
+                        .map_err(|err| {
+                            eprintln!("Shadertoy sound init failed ({}): {err}", sound_path.display());
+                        })
+                        .ok()
+                })
+            } else {
+                None
+            };
+
             *resources.borrow_mut() = Some(ShadertoyResources {
                 _libgl: libgl,
                 gl,
@@ -276,6 +463,9 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     channel_kinds: image_channel_kinds,
                 },
                 buffers,
+                external_channels,
+                noise_tex,
+                sound,
                 blit_program,
                 vao,
                 black_tex,
@@ -299,6 +489,16 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
             if let Some(res) = resources.borrow_mut().take() {
                 area.make_current();
                 unsafe {
+                    if let Some(mut sound) = res.sound {
+                        sound.backend.kill_and_wait();
+                        res.gl.delete_texture(sound.tex);
+                        res.gl.delete_framebuffer(sound.fbo);
+                        res.gl.delete_program(sound.program.program);
+                    }
+                    for ch in res.external_channels.iter().flatten() {
+                        res.gl.delete_texture(ch.tex);
+                    }
+                    res.gl.delete_texture(res.noise_tex);
                     res.gl.delete_texture(res.black_3d_tex);
                     res.gl.delete_texture(res.black_cube_tex);
                     res.gl.delete_texture(res.black_tex);
@@ -322,7 +522,7 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
 
     {
         let resources = resources.clone();
-        let mouse_pos = mouse_pos.clone();
+        let mouse_state = mouse_state.clone();
         gl_area.connect_render(move |area, _ctx| {
             let mut binding = resources.borrow_mut();
             let Some(res) = binding.as_mut() else {
@@ -347,11 +547,23 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
             let dt = (t - res.last_t).max(0.0);
             res.last_t = t;
 
-            let (mx, my) = mouse_pos.borrow().unwrap_or((0.0, 0.0));
-            let mx = mx * (render_w as f32 / target_w.max(1.0));
-            let my_from_top = my * (render_h as f32 / target_h.max(1.0));
-            // Shadertoy iMouse uses origin at bottom-left.
-            let my = (render_h as f32 - my_from_top).max(0.0);
+            let state = *mouse_state.borrow();
+            let (mx, my, mz, mw) = {
+                let scale_pos = |(x, y): (f32, f32)| -> (f32, f32) {
+                    let x = x * (render_w as f32 / target_w.max(1.0));
+                    let y_from_top = y * (render_h as f32 / target_h.max(1.0));
+                    // Shadertoy iMouse uses origin at bottom-left.
+                    let y = (render_h as f32 - y_from_top).max(0.0);
+                    (x, y)
+                };
+                let (mx, my) = state.pos.map(scale_pos).unwrap_or((0.0, 0.0));
+                let (mut mz, mut mw) = state.last_press.map(scale_pos).unwrap_or((0.0, 0.0));
+                if !state.pressed {
+                    mz = -mz;
+                    mw = -mw;
+                }
+                (mx, my, mz, mw)
+            };
 
             let (year, month, day, seconds) = current_date_parts();
 
@@ -389,13 +601,13 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     let Some(prog) = res.buffers[pass_idx].as_ref() else {
                         continue;
                     };
-                    let channel_tex = resolve_channel_textures(res, pass_idx, true);
+                    let channel_bindings = resolve_channel_bindings(res, pass_idx, true, t);
                     let Some(state) = res.buffer_states[pass_idx].as_mut() else {
                         continue;
                     };
                     bind_channels(
                         &res.gl,
-                        &channel_tex,
+                        &channel_bindings,
                         &prog.channel_kinds,
                         res.black_cube_tex,
                         res.black_3d_tex,
@@ -419,11 +631,8 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     set_channel_uniforms(
                         &res.gl,
                         &prog.uniforms,
-                        &channel_tex,
+                        &channel_bindings,
                         &prog.channel_kinds,
-                        t,
-                        render_w,
-                        render_h,
                         res.black_tex,
                     );
                     set_common_uniforms(
@@ -436,6 +645,8 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                         render_h as f32,
                         mx,
                         my,
+                        mz,
+                        mw,
                         year,
                         month,
                         day,
@@ -445,7 +656,7 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                 }
 
                 // Image pass: render into offscreen texture using current-frame buffer outputs.
-                let image_channels = resolve_channel_textures(res, SHADER_CHANNELS, false);
+                let image_channels = resolve_channel_bindings(res, SHADER_CHANNELS, false, t);
                 bind_channels(
                     &res.gl,
                     &image_channels,
@@ -466,9 +677,6 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     &res.image.uniforms,
                     &image_channels,
                     &res.image.channel_kinds,
-                    t,
-                    render_w,
-                    render_h,
                     res.black_tex,
                 );
                 set_common_uniforms(
@@ -481,12 +689,26 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
                     render_h as f32,
                     mx,
                     my,
+                    mz,
+                    mw,
                     year,
                     month,
                     day,
                     seconds,
                 );
                 res.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+
+                if res.sound.is_some() {
+                    // Borrow-split: `pump_sound` needs an immutable view of `res`, while sound needs
+                    // a mutable borrow. Temporarily take the sound state out.
+                    let mut sound = res.sound.take().expect("checked is_some");
+                    if let Err(err) = pump_sound(&res.gl, res, &mut sound) {
+                        eprintln!("Shadertoy sound: {err}");
+                        cleanup_sound(&res.gl, &mut sound);
+                    } else {
+                        res.sound = Some(sound);
+                    }
+                }
 
                 // Swap buffers after the image pass so next frame sees current output as previous frame.
                 for i in 0..SHADER_CHANNELS {
@@ -534,6 +756,344 @@ pub fn build_shadertoy_area(shader_path: &str, density: PatternDensity) -> GLAre
     gl_area
 }
 
+fn init_sound_state(
+    gl: &glow::Context,
+    common_src: Option<&str>,
+    sound_path: &Path,
+    volume: f32,
+) -> Result<SoundState, String> {
+    if !sound_path.is_file() {
+        return Err("Sound.glsl not found".to_string());
+    }
+    let sound_src = fs::read_to_string(sound_path)
+        .map_err(|e| format!("read {}: {e}", sound_path.display()))?;
+    let sound_src = strip_shadertoy_version_lines(&sound_src);
+
+    let (program, uniforms, channel_kinds) =
+        unsafe { compile_shadertoy_sound_program_auto(gl, common_src, &sound_src) }?;
+    let u_sample_rate = unsafe { gl.get_uniform_location(program, "iSampleRate") };
+    let u_block_offset = unsafe { gl.get_uniform_location(program, "iBlockOffset") };
+
+    let (fbo, tex) = match unsafe { create_sound_fbo(gl, SOUND_BLOCK_SAMPLES, 1) } {
+        Ok(v) => v,
+        Err(err) => {
+            unsafe { gl.delete_program(program) };
+            return Err(err);
+        }
+    };
+
+    let backend = match spawn_audio_backend() {
+        Ok(b) => b,
+        Err(err) => {
+            unsafe {
+                gl.delete_texture(tex);
+                gl.delete_framebuffer(fbo);
+                gl.delete_program(program);
+            }
+            return Err(err);
+        }
+    };
+
+    Ok(SoundState {
+        program: SoundProgram {
+            program,
+            uniforms,
+            channel_kinds,
+            u_sample_rate,
+            u_block_offset,
+        },
+        fbo,
+        tex,
+        pixels: vec![0.0; (SOUND_BLOCK_SAMPLES as usize) * 4],
+        bytes: Vec::with_capacity((SOUND_BLOCK_SAMPLES as usize) * 2 * 4),
+        next_sample: 0,
+        block_index: 0,
+        volume,
+        backend,
+    })
+}
+
+fn spawn_audio_backend() -> Result<SoundBackend, String> {
+    // Prefer PipeWire (pw-cat), fallback to PulseAudio (paplay).
+    let pw_err = match spawn_pw_cat() {
+        Ok(pw) => return Ok(SoundBackend::PwCat(pw)),
+        Err(err) => err,
+    };
+    match spawn_paplay() {
+        Ok(pa) => Ok(SoundBackend::PaPlay(pa)),
+        Err(pa_err) => Err(format!(
+            "{pw_err}; fallback {pa_err} (no PipeWire/PulseAudio session?)"
+        )),
+    }
+}
+
+fn spawn_pw_cat() -> Result<Child, String> {
+    let mut pw = Command::new("pw-cat")
+        .args([
+            "--playback",
+            "--raw",
+            "--format",
+            "f32",
+            "--rate",
+            &format!("{}", SOUND_SAMPLE_RATE as u32),
+            "--channels",
+            "2",
+            "--latency",
+            "100ms",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn pw-cat: {e}"))?;
+
+    if pw.stdin.is_none() {
+        let _ = pw.kill();
+        let _ = pw.wait();
+        return Err("pw-cat stdin is not available".to_string());
+    }
+    // If it exits immediately, treat as unavailable (e.g. no PipeWire session).
+    if let Ok(Some(status)) = pw.try_wait() {
+        return Err(format!("pw-cat exited early: {status}"));
+    }
+    Ok(pw)
+}
+
+fn spawn_paplay() -> Result<Child, String> {
+    let mut pa = Command::new("paplay")
+        .args([
+            "--playback",
+            "--raw",
+            "--format=float32le",
+            "--rate",
+            &format!("{}", SOUND_SAMPLE_RATE as u32),
+            "--channels=2",
+            "--client-name=vesper",
+            "--stream-name=Vesper Shadertoy",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn paplay: {e}"))?;
+    if pa.stdin.is_none() {
+        let _ = pa.kill();
+        let _ = pa.wait();
+        return Err("paplay stdin is not available".to_string());
+    }
+    // If it exits immediately, treat as unavailable.
+    if let Ok(Some(status)) = pa.try_wait() {
+        return Err(format!("paplay exited early: {status}"));
+    }
+    Ok(pa)
+}
+
+fn cleanup_sound(gl: &glow::Context, sound: &mut SoundState) {
+    sound.backend.kill_and_wait();
+    unsafe {
+        gl.delete_texture(sound.tex);
+        gl.delete_framebuffer(sound.fbo);
+        gl.delete_program(sound.program.program);
+    }
+}
+
+unsafe fn create_sound_fbo(
+    gl: &glow::Context,
+    w: i32,
+    h: i32,
+) -> Result<(glow::NativeFramebuffer, glow::NativeTexture), String> {
+    let (fbo, tex) = create_fbo(gl)?;
+
+    gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+    gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+    gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+    gl.tex_image_2d(
+        glow::TEXTURE_2D,
+        0,
+        glow::RGBA32F as i32,
+        w,
+        h,
+        0,
+        glow::RGBA,
+        glow::FLOAT,
+        None,
+    );
+    gl.bind_texture(glow::TEXTURE_2D, None);
+
+    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+    gl.framebuffer_texture_2d(
+        glow::FRAMEBUFFER,
+        glow::COLOR_ATTACHMENT0,
+        glow::TEXTURE_2D,
+        Some(tex),
+        0,
+    );
+    gl.draw_buffers(&[glow::COLOR_ATTACHMENT0]);
+    let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+    gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+    if status != glow::FRAMEBUFFER_COMPLETE {
+        gl.delete_texture(tex);
+        gl.delete_framebuffer(fbo);
+        return Err(format!("sound framebuffer incomplete: 0x{status:x}"));
+    }
+
+    Ok((fbo, tex))
+}
+
+fn pump_sound(
+    gl: &glow::Context,
+    res: &ShadertoyResources,
+    sound: &mut SoundState,
+) -> Result<(), String> {
+    // Best-effort: generate audio slightly ahead of real time.
+    let t = res.start.elapsed().as_secs_f32();
+    let target_sample = (t * SOUND_SAMPLE_RATE) as i32;
+    let ahead = (SOUND_AHEAD_SECONDS * SOUND_SAMPLE_RATE) as i32;
+    let max_sample = target_sample.saturating_add(ahead);
+    if sound.next_sample >= max_sample {
+        return Ok(());
+    }
+
+    ensure_sound_backend(sound)?;
+
+    unsafe {
+        let prev_fbo_binding = gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING);
+        let prev_fbo = fbo_from_gl_binding(prev_fbo_binding);
+
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(sound.fbo));
+        gl.viewport(0, 0, SOUND_BLOCK_SAMPLES, 1);
+        gl.clear_color(0.0, 0.0, 0.0, 1.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+
+        gl.use_program(Some(sound.program.program));
+
+        if let Some(loc) = &sound.program.u_sample_rate {
+            gl.uniform_1_f32(Some(loc), SOUND_SAMPLE_RATE);
+        }
+        if let Some(loc) = &sound.program.u_block_offset {
+            gl.uniform_1_i32(Some(loc), sound.next_sample);
+        }
+
+        let block_time = sound.next_sample as f32 / SOUND_SAMPLE_RATE;
+        let dt = SOUND_BLOCK_SAMPLES as f32 / SOUND_SAMPLE_RATE;
+        let channels = resolve_channel_bindings(res, SHADER_CHANNELS, false, block_time);
+        bind_channels(
+            gl,
+            &channels,
+            &sound.program.channel_kinds,
+            res.black_cube_tex,
+            res.black_3d_tex,
+        );
+        set_channel_uniforms(
+            gl,
+            &sound.program.uniforms,
+            &channels,
+            &sound.program.channel_kinds,
+            res.black_tex,
+        );
+        set_common_uniforms(
+            gl,
+            &sound.program.uniforms,
+            block_time,
+            dt,
+            sound.block_index,
+            SOUND_BLOCK_SAMPLES as f32,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        );
+        gl.draw_arrays(glow::TRIANGLES, 0, 3);
+
+        gl.read_pixels(
+            0,
+            0,
+            SOUND_BLOCK_SAMPLES,
+            1,
+            glow::RGBA,
+            glow::FLOAT,
+            glow::PixelPackData::Slice(bytemuck::cast_slice_mut(&mut sound.pixels)),
+        );
+
+        gl.bind_framebuffer(glow::FRAMEBUFFER, prev_fbo);
+    }
+
+    sound.bytes.clear();
+    sound.bytes.reserve((SOUND_BLOCK_SAMPLES as usize) * 2 * 4);
+    for i in 0..SOUND_BLOCK_SAMPLES as usize {
+        let l = (sound.pixels[i * 4] * sound.volume).clamp(-1.0, 1.0);
+        let r = (sound.pixels[i * 4 + 1] * sound.volume).clamp(-1.0, 1.0);
+        sound.bytes.extend_from_slice(&l.to_le_bytes());
+        sound.bytes.extend_from_slice(&r.to_le_bytes());
+    }
+    if let Err(err) = write_sound(sound) {
+        // pw-cat can be present but non-functional in some environments (e.g. no PipeWire session).
+        // Try a best-effort runtime fallback to paplay once.
+        if sound.backend.is_pw_cat() {
+            sound.backend.kill_and_wait();
+            let pa = spawn_paplay()
+                .map_err(|e| format!("{err}; fallback {e} (no PipeWire/PulseAudio session?)"))?;
+            sound.backend = SoundBackend::PaPlay(pa);
+            write_sound(sound)
+                .map_err(|e| format!("{err}; fallback {e} (no PipeWire/PulseAudio session?)"))?;
+        } else {
+            return Err(err);
+        }
+    }
+
+    sound.next_sample = sound.next_sample.saturating_add(SOUND_BLOCK_SAMPLES);
+    sound.block_index = sound.block_index.wrapping_add(1);
+    Ok(())
+}
+
+fn ensure_sound_backend(sound: &mut SoundState) -> Result<(), String> {
+    if let Some(status) = sound
+        .backend
+        .try_wait()
+        .map_err(|e| format!("{}: {e}", sound.backend.kind_name()))?
+    {
+        // If pw-cat died, try switching to paplay once.
+        if sound.backend.is_pw_cat() {
+            sound.backend.kill_and_wait();
+            match spawn_paplay() {
+                Ok(pa) => {
+                    sound.backend = SoundBackend::PaPlay(pa);
+                    return Ok(());
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "pw-cat exited: {status}; fallback {err} (no PipeWire/PulseAudio session?)"
+                    ));
+                }
+            }
+        }
+        return Err(format!("{} exited: {status}", sound.backend.kind_name()));
+    }
+    let name = sound.backend.kind_name();
+    if sound.backend.stdin_mut().is_none() {
+        return Err(format!("{name} stdin closed"));
+    }
+    Ok(())
+}
+
+fn write_sound(sound: &mut SoundState) -> Result<(), String> {
+    let name = sound.backend.kind_name();
+    let stdin = sound
+        .backend
+        .stdin_mut()
+        .ok_or_else(|| format!("{name} stdin closed"))?;
+    let bytes = sound.bytes.as_slice();
+    stdin
+        .write_all(bytes)
+        .map_err(|e| format!("{name} write: {e}"))
+}
+
 fn wrap_shadertoy_fragment(
     common_src: Option<&str>,
     user_src: &str,
@@ -549,6 +1109,7 @@ fn wrap_shadertoy_fragment(
     out.push_str("uniform vec3 iResolution;\n");
     out.push_str("uniform float iTime;\n");
     out.push_str("uniform float iTimeDelta;\n");
+    out.push_str("uniform float iFrameRate;\n");
     out.push_str("uniform int iFrame;\n");
     out.push_str("uniform vec4 iMouse;\n");
     out.push_str("uniform vec4 iDate;\n");
@@ -577,24 +1138,136 @@ fn wrap_shadertoy_fragment(
     }
     out.push_str(user_src);
     out.push_str("\n\n");
+    // Some shader packs redefine `mainImage` as a macro (e.g. for manual anti-aliasing). That
+    // breaks our `mainImage(...)` call below. Undefine it after user code so the function can be
+    // called normally.
+    out.push_str("#ifdef mainImage\n#undef mainImage\n#endif\n\n");
     out.push_str("void main() {\n");
     out.push_str("    mainImage(fragColor, gl_FragCoord.xy);\n");
     out.push_str("}\n");
     out
 }
 
+fn wrap_shadertoy_sound_fragment(
+    common_src: Option<&str>,
+    user_src: &str,
+    channel_kinds: &[SamplerKind; SHADER_CHANNELS],
+) -> String {
+    // Shadertoy "Sound" pass is still a fragment shader. We render a 1D block into a float texture
+    // and stream the (L,R) samples from fragColor.rg.
+    let mut out = String::new();
+    out.push_str("#version 330 core\n");
+    out.push_str("#define texture2D texture\n");
+    out.push_str("#define textureCube texture\n");
+    out.push_str("out vec4 fragColor;\n");
+    out.push_str("uniform vec3 iResolution;\n");
+    out.push_str("uniform float iTime;\n");
+    out.push_str("uniform float iTimeDelta;\n");
+    out.push_str("uniform float iFrameRate;\n");
+    out.push_str("uniform int iFrame;\n");
+    out.push_str("uniform vec4 iMouse;\n");
+    out.push_str("uniform vec4 iDate;\n");
+    out.push_str("uniform float iChannelTime[4];\n");
+    out.push_str("uniform vec3 iChannelResolution[4];\n");
+    out.push_str("uniform float iSampleRate;\n");
+    out.push_str("uniform int iBlockOffset;\n");
+    for i in 0..SHADER_CHANNELS {
+        out.push_str(&format!("uniform sampler2D iChannel{i}_2d;\n"));
+        out.push_str(&format!("uniform samplerCube iChannel{i}_cube;\n"));
+        out.push_str(&format!("uniform sampler3D iChannel{i}_3d;\n"));
+    }
+    for i in 0..SHADER_CHANNELS {
+        let alias = match channel_kinds[i] {
+            SamplerKind::Tex2D => format!("iChannel{i}_2d"),
+            SamplerKind::Cube => format!("iChannel{i}_cube"),
+            SamplerKind::Tex3D => format!("iChannel{i}_3d"),
+        };
+        out.push_str(&format!("#define iChannel{i} {alias}\n"));
+    }
+    out.push_str("\n");
+    if let Some(common_src) = common_src {
+        let common_src = common_src.trim();
+        if !common_src.is_empty() {
+            out.push_str(common_src);
+            out.push_str("\n\n");
+        }
+    }
+    out.push_str(user_src);
+    out.push_str("\n\n");
+    out.push_str("#ifdef mainSound\n#undef mainSound\n#endif\n\n");
+    out.push_str("void main() {\n");
+    out.push_str("    int x = int(gl_FragCoord.x) - 1;\n");
+    out.push_str("    int y = int(gl_FragCoord.y) - 1;\n");
+    out.push_str("    int w = int(iResolution.x);\n");
+    out.push_str("    int samp = iBlockOffset + x + y * w;\n");
+    out.push_str("    float time = float(samp) / iSampleRate;\n");
+    out.push_str("    vec2 s = mainSound(samp, time);\n");
+    out.push_str("    fragColor = vec4(s, 0.0, 1.0);\n");
+    out.push_str("}\n");
+    out
+}
+
 fn strip_shadertoy_version_lines(src: &str) -> String {
-    // Shadertoy snippets sometimes include `#version ...`; our wrapper defines version already.
-    src.lines()
-        .filter(|line| !line.trim_start().starts_with("#version"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    // Backward-compatible alias for older callsites.
+    sanitize_shadertoy_source(src)
+}
+
+fn sanitize_shadertoy_source(src: &str) -> String {
+    // Shadertoy snippets are often copy-pasted from WebGL contexts. We provide a few best-effort
+    // sanitizers so more shaders compile in desktop GLSL 330 core.
+    //
+    // - Strip `#version` lines (we provide our own).
+    // - Strip `precision ...` lines (not valid in desktop GLSL).
+    // - Fix a common "comment toggle" artifact found in some shader collections where a line
+    //   starts with `/ */` (which prematurely terminates a `/* ... */` block). We make it `* /`
+    //   so it stays inside the comment.
+    let mut out = String::new();
+    let mut first = true;
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#version") {
+            continue;
+        }
+        if trimmed.starts_with("precision ") {
+            continue;
+        }
+
+        let fixed = sanitize_comment_toggle_line(line);
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(&fixed);
+    }
+    out
+}
+
+fn sanitize_comment_toggle_line(line: &str) -> String {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('/') {
+        return line.to_string();
+    }
+    let after_slash = trimmed[1..].trim_start();
+    if !after_slash.starts_with("*/") {
+        return line.to_string();
+    }
+    // Replace the first `*/` in the original line with `* /` (insert a space), preventing an
+    // accidental block comment terminator.
+    if let Some(pos) = line.find("*/") {
+        let mut out = String::with_capacity(line.len() + 1);
+        out.push_str(&line[..pos]);
+        out.push_str("* /");
+        out.push_str(&line[pos + 2..]);
+        return out;
+    }
+    line.to_string()
 }
 
 #[derive(Clone, Copy)]
 struct Uniforms {
     u_time: Option<glow::NativeUniformLocation>,
     u_time_delta: Option<glow::NativeUniformLocation>,
+    u_frame_rate: Option<glow::NativeUniformLocation>,
     u_frame: Option<glow::NativeUniformLocation>,
     u_resolution: Option<glow::NativeUniformLocation>,
     u_mouse: Option<glow::NativeUniformLocation>,
@@ -672,6 +1345,7 @@ unsafe fn compile_shadertoy_program(
         Uniforms {
             u_time: gl.get_uniform_location(program, "iTime"),
             u_time_delta: gl.get_uniform_location(program, "iTimeDelta"),
+            u_frame_rate: gl.get_uniform_location(program, "iFrameRate"),
             u_frame: gl.get_uniform_location(program, "iFrame"),
             u_resolution: gl.get_uniform_location(program, "iResolution"),
             u_mouse: gl.get_uniform_location(program, "iMouse"),
@@ -696,8 +1370,36 @@ unsafe fn compile_shadertoy_program_auto(
     let mut kinds = [SamplerKind::Tex2D; SHADER_CHANNELS];
     let mut last_err: Option<String> = None;
 
-    for _ in 0..3 {
+    for _ in 0..5 {
         let wrapped = wrap_shadertoy_fragment(common_src, user_src, &kinds);
+        match compile_shadertoy_program(gl, &wrapped) {
+            Ok((program, uniforms)) => return Ok((program, uniforms, kinds)),
+            Err(err) => {
+                let log = err
+                    .strip_prefix("fragment shader compile failed: ")
+                    .unwrap_or(&err);
+                let changed = infer_channel_kinds_from_compile_log(&wrapped, log, &mut kinds);
+                last_err = Some(err);
+                if !changed {
+                    break;
+                }
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| "unknown shader compile error".to_string()))
+}
+
+unsafe fn compile_shadertoy_sound_program_auto(
+    gl: &glow::Context,
+    common_src: Option<&str>,
+    user_src: &str,
+) -> Result<(glow::NativeProgram, Uniforms, [SamplerKind; SHADER_CHANNELS]), String> {
+    let mut kinds = [SamplerKind::Tex2D; SHADER_CHANNELS];
+    let mut last_err: Option<String> = None;
+
+    for _ in 0..5 {
+        let wrapped = wrap_shadertoy_sound_fragment(common_src, user_src, &kinds);
         match compile_shadertoy_program(gl, &wrapped) {
             Ok((program, uniforms)) => return Ok((program, uniforms, kinds)),
             Err(err) => {
@@ -721,20 +1423,26 @@ fn infer_channel_kinds_from_compile_log(
     compile_log: &str,
     kinds: &mut [SamplerKind; SHADER_CHANNELS],
 ) -> bool {
-    // Common issue: some Shadertoy shaders sample iChannelN as a cubemap (`texture(iChannelN, vec3)`),
-    // but our default channel type is `sampler2D`. When this happens, try recompiling the program
-    // with that channel declared as `samplerCube`.
-    if !compile_log.contains("texture(sampler2D, vec3)") {
-        return false;
-    }
-
+    // Common issue: some Shadertoy shaders sample iChannelN with a coordinate type that doesn't
+    // match the inferred sampler type. We use compile logs to adjust iChannelN sampler kinds.
     let src_lines: Vec<&str> = wrapped_src.lines().collect();
     let mut changed = false;
 
     for log_line in compile_log.lines() {
-        if !log_line.contains("texture(sampler2D, vec3)") {
-            continue;
-        }
+        let desired = if log_line.contains("call to `texture(sampler2D, vec3")
+            || log_line.contains("call to `textureLod(sampler2D, vec3")
+            || log_line.contains("call to `textureGrad(sampler2D, vec3")
+        {
+            Some(SamplerKind::Cube)
+        } else if log_line.contains("call to `texture(samplerCube, vec2")
+            || log_line.contains("call to `textureLod(samplerCube, vec2")
+            || log_line.contains("call to `textureGrad(samplerCube, vec2")
+        {
+            Some(SamplerKind::Tex2D)
+        } else {
+            None
+        };
+        let Some(desired) = desired else { continue };
 
         // Example: `0:1056(13): error: ...`
         let Some((_, after_prefix)) = log_line.split_once("0:") else {
@@ -752,30 +1460,16 @@ fn infer_channel_kinds_from_compile_log(
         };
 
         for ch in 0..SHADER_CHANNELS {
-            if kinds[ch] != SamplerKind::Tex2D {
-                continue;
-            }
             if src_line.contains(&format!("iChannel{ch}")) {
-                kinds[ch] = SamplerKind::Cube;
-                changed = true;
+                if kinds[ch] != desired {
+                    kinds[ch] = desired;
+                    changed = true;
+                }
             }
         }
     }
 
-    if changed {
-        return true;
-    }
-
-    // Fallback: if we couldn't locate the channel line reliably, promote all channels to `samplerCube`.
-    // This keeps many cubemap-based shaders working without forcing users to edit code.
-    let mut any = false;
-    for ch in 0..SHADER_CHANNELS {
-        if kinds[ch] == SamplerKind::Tex2D {
-            kinds[ch] = SamplerKind::Cube;
-            any = true;
-        }
-    }
-    any
+    changed
 }
 
 unsafe fn compile_blit_program(
@@ -965,6 +1659,56 @@ unsafe fn create_black_texture(gl: &glow::Context) -> Result<glow::NativeTexture
     Ok(tex)
 }
 
+unsafe fn create_texture_from_image(
+    gl: &glow::Context,
+    path: &Path,
+) -> Result<(glow::NativeTexture, (i32, i32)), String> {
+    let img = image::open(path).map_err(|e| format!("image::open({}): {e}", path.display()))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+
+    let tex = gl
+        .create_texture()
+        .map_err(|e| format!("create_texture: {e}"))?;
+    init_rgba8_texture(gl, tex);
+    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+    gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+    gl.tex_image_2d(
+        glow::TEXTURE_2D,
+        0,
+        glow::RGBA8 as i32,
+        w as i32,
+        h as i32,
+        0,
+        glow::RGBA,
+        glow::UNSIGNED_BYTE,
+        Some(rgba.as_raw()),
+    );
+    gl.bind_texture(glow::TEXTURE_2D, None);
+    Ok((tex, (w as i32, h as i32)))
+}
+
+unsafe fn load_external_channels(
+    gl: &glow::Context,
+    paths: &[Option<PathBuf>; SHADER_CHANNELS],
+) -> [Option<ExternalChannel>; SHADER_CHANNELS] {
+    std::array::from_fn(|i| {
+        let Some(path) = paths[i].as_ref() else {
+            return None;
+        };
+        match create_texture_from_image(gl, path) {
+            Ok((tex, size)) => Some(ExternalChannel { tex, size }),
+            Err(err) => {
+                eprintln!(
+                    "Shadertoy: failed to load iChannel{i} asset ({}): {err}",
+                    path.display()
+                );
+                None
+            }
+        }
+    })
+}
+
 unsafe fn create_black_cubemap_texture(gl: &glow::Context) -> Result<glow::NativeTexture, String> {
     let tex = gl
         .create_texture()
@@ -1013,6 +1757,69 @@ unsafe fn create_black_cubemap_texture(gl: &glow::Context) -> Result<glow::Nativ
         );
     }
     gl.bind_texture(glow::TEXTURE_CUBE_MAP, None);
+    Ok(tex)
+}
+
+unsafe fn create_noise_texture(gl: &glow::Context) -> Result<glow::NativeTexture, String> {
+    const W: i32 = 256;
+    const H: i32 = 256;
+
+    let tex = gl
+        .create_texture()
+        .map_err(|e| format!("create_texture: {e}"))?;
+
+    gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_MIN_FILTER,
+        glow::LINEAR as i32,
+    );
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_MAG_FILTER,
+        glow::LINEAR as i32,
+    );
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_WRAP_S,
+        glow::REPEAT as i32,
+    );
+    gl.tex_parameter_i32(
+        glow::TEXTURE_2D,
+        glow::TEXTURE_WRAP_T,
+        glow::REPEAT as i32,
+    );
+
+    let mut seed: u32 = 0x1234_5678;
+    let mut rng = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+
+    let mut data: Vec<u8> = vec![0; (W as usize) * (H as usize) * 4];
+    for px in data.chunks_exact_mut(4) {
+        let v = (rng() & 0xff) as u8;
+        px[0] = v;
+        px[1] = v;
+        px[2] = v;
+        px[3] = 255;
+    }
+
+    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+    gl.tex_image_2d(
+        glow::TEXTURE_2D,
+        0,
+        glow::RGBA8 as i32,
+        W,
+        H,
+        0,
+        glow::RGBA,
+        glow::UNSIGNED_BYTE,
+        Some(&data),
+    );
+    gl.bind_texture(glow::TEXTURE_2D, None);
     Ok(tex)
 }
 
@@ -1142,16 +1949,16 @@ unsafe fn ensure_buffer_size(
 
 unsafe fn bind_channels(
     gl: &glow::Context,
-    textures_2d: &[glow::NativeTexture; SHADER_CHANNELS],
+    bindings: &[ChannelBinding; SHADER_CHANNELS],
     channel_kinds: &[SamplerKind; SHADER_CHANNELS],
     black_cube_tex: glow::NativeTexture,
     black_3d_tex: glow::NativeTexture,
 ) {
-    for (i, tex) in textures_2d.iter().enumerate() {
+    for (i, binding) in bindings.iter().enumerate() {
         gl.active_texture(glow::TEXTURE0 + i as u32);
         match channel_kinds[i] {
             SamplerKind::Tex2D => {
-                gl.bind_texture(glow::TEXTURE_2D, Some(*tex));
+                gl.bind_texture(glow::TEXTURE_2D, Some(binding.tex));
                 gl.bind_texture(glow::TEXTURE_CUBE_MAP, None);
                 gl.bind_texture(glow::TEXTURE_3D, None);
             }
@@ -1170,25 +1977,61 @@ unsafe fn bind_channels(
     gl.active_texture(glow::TEXTURE0);
 }
 
-fn resolve_channel_textures(
+#[derive(Clone, Copy)]
+struct ChannelBinding {
+    tex: glow::NativeTexture,
+    size: (i32, i32),
+    time: f32,
+}
+
+fn resolve_channel_bindings(
     res: &ShadertoyResources,
     pass_idx: usize,
     buffer_pass: bool,
-) -> [glow::NativeTexture; SHADER_CHANNELS] {
+    t: f32,
+) -> [ChannelBinding; SHADER_CHANNELS] {
     std::array::from_fn(|ch| {
-        let Some(state) = res.buffer_states[ch].as_ref() else {
-            return res.black_tex;
-        };
-        if buffer_pass {
-            if ch < pass_idx && res.buffers[ch].is_some() {
-                state.tex_next
+        // BufferA..D are exposed to the Image pass as iChannel0..3. For buffer passes, only buffers
+        // from earlier passes are exposed to avoid accidental self-feedback loops.
+        if res.buffers[ch].is_some() && (!buffer_pass || ch < pass_idx) {
+            let Some(state) = res.buffer_states[ch].as_ref() else {
+                return ChannelBinding {
+                    tex: res.black_tex,
+                    size: (1, 1),
+                    time: 0.0,
+                };
+            };
+            let tex = state.tex_next;
+            let size = if state.size.0 > 0 && state.size.1 > 0 {
+                state.size
             } else {
-                state.tex_prev
-            }
-        } else if res.buffers[ch].is_some() {
-            state.tex_next
-        } else {
-            res.black_tex
+                (1, 1)
+            };
+            return ChannelBinding { tex, size, time: t };
+        }
+
+        if let Some(ext) = res.external_channels[ch].as_ref() {
+            return ChannelBinding {
+                tex: ext.tex,
+                size: ext.size,
+                time: 0.0,
+            };
+        }
+
+        // Best-effort: common Shadertoy buffer passes expect iChannel0=Noise when no assets are
+        // configured (e.g. "Elevated" by iq). Provide a built-in 256x256 noise texture.
+        if buffer_pass && ch == 0 {
+            return ChannelBinding {
+                tex: res.noise_tex,
+                size: (256, 256),
+                time: 0.0,
+            };
+        }
+
+        ChannelBinding {
+            tex: res.black_tex,
+            size: (1, 1),
+            time: 0.0,
         }
     })
 }
@@ -1203,6 +2046,8 @@ unsafe fn set_common_uniforms(
     h: f32,
     mx: f32,
     my: f32,
+    mz: f32,
+    mw: f32,
     year: f32,
     month: f32,
     day: f32,
@@ -1214,6 +2059,10 @@ unsafe fn set_common_uniforms(
     if let Some(loc) = &uniforms.u_time_delta {
         gl.uniform_1_f32(Some(loc), dt);
     }
+    if let Some(loc) = &uniforms.u_frame_rate {
+        let fr = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        gl.uniform_1_f32(Some(loc), fr);
+    }
     if let Some(loc) = &uniforms.u_frame {
         gl.uniform_1_i32(Some(loc), frame);
     }
@@ -1221,7 +2070,7 @@ unsafe fn set_common_uniforms(
         gl.uniform_3_f32(Some(loc), w, h, 1.0);
     }
     if let Some(loc) = &uniforms.u_mouse {
-        gl.uniform_4_f32(Some(loc), mx, my, 0.0, 0.0);
+        gl.uniform_4_f32(Some(loc), mx, my, mz, mw);
     }
     if let Some(loc) = &uniforms.u_date {
         gl.uniform_4_f32(Some(loc), year, month, day, seconds);
@@ -1231,21 +2080,33 @@ unsafe fn set_common_uniforms(
 unsafe fn set_channel_uniforms(
     gl: &glow::Context,
     uniforms: &Uniforms,
-    channels: &[glow::NativeTexture; SHADER_CHANNELS],
+    channels: &[ChannelBinding; SHADER_CHANNELS],
     channel_kinds: &[SamplerKind; SHADER_CHANNELS],
-    t: f32,
-    render_w: i32,
-    render_h: i32,
     black_tex: glow::NativeTexture,
 ) {
     for i in 0..SHADER_CHANNELS {
-        let is_black = channel_kinds[i] != SamplerKind::Tex2D || channels[i] == black_tex;
-        let (cw, ch) = if is_black { (1.0, 1.0) } else { (render_w as f32, render_h as f32) };
+        if channel_kinds[i] != SamplerKind::Tex2D {
+            if let Some(loc) = &uniforms.u_channel_resolution[i] {
+                gl.uniform_3_f32(Some(loc), 1.0, 1.0, 1.0);
+            }
+            if let Some(loc) = &uniforms.u_channel_time[i] {
+                gl.uniform_1_f32(Some(loc), 0.0);
+            }
+            continue;
+        }
+
+        let binding = channels[i];
+        let is_black = binding.tex == black_tex;
+        let (cw, ch) = if is_black {
+            (1.0, 1.0)
+        } else {
+            (binding.size.0.max(1) as f32, binding.size.1.max(1) as f32)
+        };
         if let Some(loc) = &uniforms.u_channel_resolution[i] {
             gl.uniform_3_f32(Some(loc), cw, ch, 1.0);
         }
         if let Some(loc) = &uniforms.u_channel_time[i] {
-            gl.uniform_1_f32(Some(loc), if is_black { 0.0 } else { t });
+            gl.uniform_1_f32(Some(loc), if is_black { 0.0 } else { binding.time });
         }
     }
 }
@@ -1285,6 +2146,8 @@ struct ShadertoySet {
     image_path: PathBuf,
     common_path: Option<PathBuf>,
     buffer_paths: [Option<PathBuf>; SHADER_CHANNELS],
+    sound_path: Option<PathBuf>,
+    asset_channels: [Option<PathBuf>; SHADER_CHANNELS],
 }
 
 fn discover_shadertoy_set(path: &Path) -> Result<ShadertoySet, String> {
@@ -1339,6 +2202,8 @@ fn discover_shadertoy_set(path: &Path) -> Result<ShadertoySet, String> {
         image_path,
         common_path: candidates.get("common").cloned(),
         buffer_paths,
+        sound_path: candidates.get("sound").cloned(),
+        asset_channels: discover_channel_assets(&base_dir),
     })
 }
 
@@ -1360,7 +2225,14 @@ fn scan_shadertoy_dir(dir: &Path) -> Result<std::collections::HashMap<String, Pa
         let key = normalize_name(stem);
         if matches!(
             key.as_str(),
-            "image" | "mainimage" | "common" | "buffera" | "bufferb" | "bufferc" | "bufferd"
+            "image"
+                | "mainimage"
+                | "common"
+                | "buffera"
+                | "bufferb"
+                | "bufferc"
+                | "bufferd"
+                | "sound"
         ) {
             // Prefer first match; users can keep only one of each.
             out.entry(key).or_insert(path);
@@ -1383,4 +2255,32 @@ fn normalize_name(name: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
         .collect()
+}
+
+fn discover_channel_assets(base_dir: &Path) -> [Option<PathBuf>; SHADER_CHANNELS] {
+    std::array::from_fn(|ch| find_channel_asset(base_dir, ch))
+}
+
+fn find_channel_asset(base_dir: &Path, ch: usize) -> Option<PathBuf> {
+    let assets_dir = base_dir.join("assets");
+    for dir in [&assets_dir, base_dir] {
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(rd) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let key = normalize_name(stem);
+            if key == format!("ichannel{ch}") {
+                return Some(path);
+            }
+        }
+    }
+    None
 }

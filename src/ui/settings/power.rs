@@ -13,7 +13,7 @@ pub struct PowerWidgets {
     pub apps_group: adw::PreferencesGroup,
     pub inhibit_switch: Switch,
     pub power_integration_switch: Switch,
-    pub lock_screen_switch: Switch,
+    pub integrated_lock_screen_switch: Switch,
     pub mpris_pause_switch: Switch,
     pub app_inhibit_list: ListBox,
     pub app_inhibit_entry: adw::EntryRow,
@@ -27,6 +27,10 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
         .title(tr(lang, "Питание"))
         .build();
     let show_desktop_integrations = desktop::is_kde_or_gnome();
+    let lock_enabled = config
+        .active_profile()
+        .integrated_lock_screen_enabled
+        .unwrap_or(config.active_profile().lock_screen_enabled);
 
     let inhibit_row = adw::ActionRow::builder()
         .title(tr(lang, "Блокировать спящий режим"))
@@ -57,21 +61,19 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
         power_group.add(&power_integration_row);
     }
 
-    let lock_screen_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(config.active_profile().lock_screen_enabled)
+    let integrated_lock_screen_row = adw::ActionRow::builder()
+        .title(tr(lang, "Системный экран блокировки"))
+        .subtitle(tr(
+            lang,
+            "При активности запускает системный экран блокировки (потребуется пароль)",
+        ))
         .build();
-    if show_desktop_integrations {
-        let lock_screen_row = adw::ActionRow::builder()
-            .title(tr(lang, "Блокировать экран при активации"))
-            .subtitle(tr(
-                lang,
-                "KDE/GNOME: интеграция с системным экраном блокировки",
-            ))
-            .build();
-        lock_screen_row.add_suffix(&lock_screen_switch);
-        power_group.add(&lock_screen_row);
-    }
+    let integrated_lock_screen_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(lock_enabled)
+        .build();
+    integrated_lock_screen_row.add_suffix(&integrated_lock_screen_switch);
+    power_group.add(&integrated_lock_screen_row);
 
     let mpris_pause_row = adw::ActionRow::builder()
         .title(tr(lang, "Приостанавливать медиаплееры (MPRIS)"))
@@ -121,7 +123,7 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
         apps_group,
         inhibit_switch,
         power_integration_switch,
-        lock_screen_switch,
+        integrated_lock_screen_switch,
         mpris_pause_switch,
         app_inhibit_list,
         app_inhibit_entry,
