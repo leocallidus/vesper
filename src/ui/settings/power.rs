@@ -12,6 +12,7 @@ pub struct PowerWidgets {
     pub group: adw::PreferencesGroup,
     pub apps_group: adw::PreferencesGroup,
     pub inhibit_switch: Switch,
+    pub ignore_idle_inhibitors_switch: Switch,
     pub power_integration_switch: Switch,
     pub integrated_lock_screen_switch: Switch,
     pub mpris_pause_switch: Switch,
@@ -44,6 +45,22 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
     inhibit_row.add_suffix(&inhibit_switch);
 
     power_group.add(&inhibit_row);
+
+    let ignore_idle_inhibitors_row = adw::ActionRow::builder()
+        .title(tr(lang, "Игнорировать блокировку бездействия"))
+        .subtitle(tr(
+            lang,
+            "Таймер срабатывает надежно, даже если сайты (Spotify, Музыка) или плееры блокируют режим простоя",
+        ))
+        .build();
+
+    let ignore_idle_inhibitors_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(config.active_profile().ignore_idle_inhibitors)
+        .build();
+    ignore_idle_inhibitors_row.add_suffix(&ignore_idle_inhibitors_switch);
+
+    power_group.add(&ignore_idle_inhibitors_row);
 
     let power_integration_switch = Switch::builder()
         .valign(Align::Center)
@@ -122,6 +139,7 @@ pub fn build_power_group(config: &Config, lang: Language) -> PowerWidgets {
         group: power_group,
         apps_group,
         inhibit_switch,
+        ignore_idle_inhibitors_switch,
         power_integration_switch,
         integrated_lock_screen_switch,
         mpris_pause_switch,

@@ -138,6 +138,7 @@ impl Tray for TrayHandler {
         let config = Config::load();
         let lang = resolve_language(config.language);
         let active_profile = config.active_profile_index();
+        let ignore_idle_inhibitors = config.active_profile().ignore_idle_inhibitors;
         let profile_items: Vec<MenuItem<Self>> = config
             .profiles
             .iter()
@@ -180,6 +181,17 @@ impl Tray for TrayHandler {
                     let current = *this.inhibit_sleep.lock().unwrap();
                     *this.inhibit_sleep.lock().unwrap() = !current;
                     let _ = this.sender.send(AppMessage::ToggleInhibitSleep(!current));
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: tr(lang, "Игнорировать блокировку бездействия").into(),
+                checked: ignore_idle_inhibitors,
+                activate: Box::new(move |this: &mut Self| {
+                    let _ = this
+                        .sender
+                        .send(AppMessage::ToggleIgnoreIdleInhibitors(!ignore_idle_inhibitors));
                 }),
                 ..Default::default()
             }

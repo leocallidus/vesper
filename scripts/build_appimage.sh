@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPDIR="${ROOT_DIR}/dist/AppDir"
 OUT_DIR="${ROOT_DIR}/dist"
 ARCH="$(uname -m)"
+export ARCH
 
 mkdir -p "${OUT_DIR}"
 rm -rf "${APPDIR}"
@@ -14,8 +15,18 @@ mkdir -p "${APPDIR}/usr/share/applications"
 mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "${APPDIR}/usr/share/icons/hicolor/128x128/apps"
 
-echo "Building release..."
-cargo build --release
+NO_BUILD=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-build) NO_BUILD=1; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ "${NO_BUILD}" -eq 0 ]]; then
+  echo "Building release..."
+  cargo build --release
+fi
 
 cp "${ROOT_DIR}/target/release/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}"
 cp "${ROOT_DIR}/packaging/appimage/${APP_NAME}.desktop" "${APPDIR}/usr/share/applications/${APP_NAME}.desktop"

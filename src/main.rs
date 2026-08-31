@@ -49,6 +49,7 @@ pub enum AppMessage {
     SwitchProfile(u8),
     ToggleEnabled(bool),
     ToggleInhibitSleep(bool),
+    ToggleIgnoreIdleInhibitors(bool),
     SetTrayIconVisible(bool),
     ShowMainWindow,
     UpdateConfig(Config),
@@ -257,7 +258,7 @@ fn main() {
         setup_app(app, Arc::clone(&state_clone), activate_sender.clone());
     });
 
-    // Activity monitor using Wayland ext-idle-notify
+    // Activity monitor
     let monitor_config = Arc::clone(&state.config);
     let monitor_screensaver_active = Arc::clone(&state.screensaver_active);
     let monitor_is_enabled = Arc::clone(&state.is_enabled);
@@ -265,22 +266,34 @@ fn main() {
 
     thread::spawn(move || {
         let idle_monitor = IdleMonitor::new();
+        let mut was_active = false;
         loop {
             let screensaver_active = *monitor_screensaver_active.lock().unwrap();
-            let is_idle = idle_monitor.as_ref().map(|m| m.is_idle()).unwrap_or(false);
+            let is_enabled = *monitor_is_enabled.lock().unwrap();
 
             if screensaver_active {
-                // Rely on screensaver window input handlers to stop; idle monitor is for auto-start.
+                was_active = true;
             } else {
-                // Check idle threshold
-                let is_enabled = *monitor_is_enabled.lock().unwrap();
-                if is_enabled && is_idle {
-                    let threshold_secs = monitor_config
-                        .lock()
-                        .unwrap()
-                        .active_profile()
-                        .inactivity_seconds;
-                    let idle_ms = idle_monitor.as_ref().map(|m| m.get_idle_ms()).unwrap_or(0);
+                if was_active {
+                    was_active = false;
+                    if let Some(m) = idle_monitor.as_ref() {
+                        m.reset();
+                    }
+                    thread::sleep(Duration::from_millis(500));
+                }
+
+                if is_enabled {
+                    let (threshold_secs, ignore_inhibitors) = {
+                        let cfg = monitor_config.lock().unwrap();
+                        let profile = cfg.active_profile();
+                        (profile.inactivity_seconds, profile.ignore_idle_inhibitors)
+                    };
+
+                    let idle_ms = idle_monitor
+                        .as_ref()
+                        .map(|m| m.get_idle_ms(ignore_inhibitors))
+                        .unwrap_or(0);
+
                     if idle_ms >= (threshold_secs as u64) * 1000 {
                         let _ = monitor_sender.send(AppMessage::IdleThresholdReached);
                         thread::sleep(Duration::from_millis(1000));
@@ -356,6 +369,11 @@ fn main() {
                     // Save to config
                     let mut config = state_receiver.config.lock().unwrap();
                     config.active_profile_mut().inhibit_sleep = inhibit;
+                    let _ = config.save();
+                }
+                AppMessage::ToggleIgnoreIdleInhibitors(ignore) => {
+                    let mut config = state_receiver.config.lock().unwrap();
+                    config.active_profile_mut().ignore_idle_inhibitors = ignore;
                     let _ = config.save();
                 }
                 AppMessage::SetTrayIconVisible(visible) => {

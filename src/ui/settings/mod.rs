@@ -131,6 +131,7 @@ struct SettingsUiRefs {
     clock_size_spin: SpinButton,
     clock_preview_label: Label,
     inhibit_switch: Switch,
+    ignore_idle_inhibitors_switch: Switch,
     power_integration_switch: Switch,
     integrated_lock_screen_switch: Switch,
     mpris_pause_switch: Switch,
@@ -618,6 +619,9 @@ impl SettingsController {
 
         self.ui.inhibit_switch.set_active(profile.inhibit_sleep);
         self.ui
+            .ignore_idle_inhibitors_switch
+            .set_active(profile.ignore_idle_inhibitors);
+        self.ui
             .power_integration_switch
             .set_active(profile.power_integration_enabled);
         let lock_enabled = profile
@@ -673,6 +677,7 @@ impl SettingsController {
         profile.media_list = self.ui.media_files.borrow().clone();
         profile.slideshow_interval_seconds = self.ui.slideshow_interval_spin.value() as u64;
         profile.inhibit_sleep = self.ui.inhibit_switch.is_active();
+        profile.ignore_idle_inhibitors = self.ui.ignore_idle_inhibitors_switch.is_active();
         profile.power_integration_enabled = self.ui.power_integration_switch.is_active();
         let lock_enabled = self.ui.integrated_lock_screen_switch.is_active();
         profile.lock_screen_enabled = lock_enabled;
@@ -1012,6 +1017,7 @@ impl SettingsWindow {
         power_page.add(&power_widgets.apps_group);
 	        let PowerWidgets {
 	            inhibit_switch,
+	            ignore_idle_inhibitors_switch,
 	            power_integration_switch,
 	            integrated_lock_screen_switch,
 	            mpris_pause_switch,
@@ -1573,6 +1579,7 @@ impl SettingsWindow {
                 clock_size_spin: clock_size_spin.clone(),
                 clock_preview_label: clock_preview_label.clone(),
                     inhibit_switch: inhibit_switch.clone(),
+                    ignore_idle_inhibitors_switch: ignore_idle_inhibitors_switch.clone(),
                     power_integration_switch: power_integration_switch.clone(),
                     integrated_lock_screen_switch: integrated_lock_screen_switch.clone(),
                     mpris_pause_switch: mpris_pause_switch.clone(),
@@ -3374,6 +3381,14 @@ impl SettingsWindow {
                 controller.mark_modified();
                 (controller.update_status)();
                 let _ = sender.send(AppMessage::ToggleInhibitSleep(active));
+            }
+        });
+
+        ignore_idle_inhibitors_switch.connect_notify_local(Some("active"), {
+            let controller = controller.clone();
+            move |_, _| {
+                controller.mark_modified();
+                (controller.update_status)();
             }
         });
 

@@ -1,0 +1,26 @@
+# Maintainer: leocallidus <leoalekseev27@gmail.com>
+pkgname=vesper
+pkgver=1.2.0
+pkgrel=1
+pkgdesc="Linux desktop screensaver written in Rust with GTK4"
+arch=('x86_64')
+url="https://github.com/leocallidus/vesper"
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'webkitgtk-6.0')
+makedepends=('cargo' 'rust' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -Dm755 "target/release/vesper" "$pkgdir/usr/bin/vesper"
+  install -Dm644 "packaging/appimage/vesper.desktop" "$pkgdir/usr/share/applications/vesper.desktop"
+  install -Dm644 "packaging/appimage/vesper.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/vesper.svg"
+  install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

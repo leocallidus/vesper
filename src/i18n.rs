@@ -287,6 +287,10 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Система" => "System",
         "Блокировать спящий режим" => "Block sleep mode",
         "Предотвращает переход системы в сон" => "Prevents the system from sleeping",
+        "Игнорировать блокировку бездействия" => "Ignore idle inhibitors",
+        "Таймер срабатывает надежно, даже если сайты (Spotify, Музыка) или плееры блокируют режим простоя" => {
+            "Triggers reliably even if websites (Spotify, Music) or players block idle mode"
+        }
         "Интеграция с настройками питания" => "Power settings integration",
         "KDE/GNOME: управление энергосбережением при скринсейвере" => {
             "KDE/GNOME: manage power saving while screensaver is active"
@@ -510,5 +514,29 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         "Импортировать" => "Import",
         "Макет часов" => "Clock layout",
         _ => key,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ignore_idle_inhibitors_translations() {
+        assert_eq!(
+            tr(Language::Russian, "Игнорировать блокировку бездействия"),
+            "Игнорировать блокировку бездействия"
+        );
+        assert_eq!(
+            tr(Language::English, "Игнорировать блокировку бездействия"),
+            "Ignore idle inhibitors"
+        );
+        assert_eq!(
+            tr(
+                Language::English,
+                "Таймер срабатывает надежно, даже если сайты (Spotify, Музыка) или плееры блокируют режим простоя"
+            ),
+            "Triggers reliably even if websites (Spotify, Music) or players block idle mode"
+        );
     }
 }

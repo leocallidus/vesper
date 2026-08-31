@@ -15,6 +15,7 @@ pub const DEFAULT_MOUSE_WAKE_DELAY_MS: u64 = 1500;
 pub const DEFAULT_VIDEO_VOLUME: u8 = 100;
 pub const DEFAULT_TOTAL_RUNTIME_SECONDS: u64 = 0;
 pub const DEFAULT_POWER_INTEGRATION_ENABLED: bool = false;
+pub const DEFAULT_IGNORE_IDLE_INHIBITORS: bool = true;
 pub const DEFAULT_MPRIS_PAUSE_ENABLED: bool = true;
 pub const DEFAULT_START_MINIMIZED: bool = false;
 pub const DEFAULT_TRAY_ICON_ENABLED: bool = true;
@@ -252,6 +253,8 @@ pub struct SettingsProfile {
     pub integrated_lock_screen_enabled: Option<bool>,
     #[serde(default = "default_mpris_pause_enabled")]
     pub mpris_pause_enabled: bool,
+    #[serde(default = "default_ignore_idle_inhibitors")]
+    pub ignore_idle_inhibitors: bool,
     #[serde(default)]
     pub app_inhibit_list: Vec<String>,
     #[serde(default)]
@@ -311,6 +314,7 @@ impl SettingsProfile {
             lock_screen_enabled: default_lock_screen_enabled(),
             integrated_lock_screen_enabled: Some(default_integrated_lock_screen_enabled()),
             mpris_pause_enabled: default_mpris_pause_enabled(),
+            ignore_idle_inhibitors: default_ignore_idle_inhibitors(),
             app_inhibit_list: Vec::new(),
             panel_commands: Vec::new(),
             fade_enabled: default_fade_enabled(),
@@ -441,6 +445,10 @@ fn default_integrated_lock_screen_enabled() -> bool {
 
 fn default_mpris_pause_enabled() -> bool {
     DEFAULT_MPRIS_PAUSE_ENABLED
+}
+
+fn default_ignore_idle_inhibitors() -> bool {
+    DEFAULT_IGNORE_IDLE_INHIBITORS
 }
 
 fn default_clock_format() -> String {
@@ -748,6 +756,7 @@ impl Config {
             lock_screen_enabled: default_lock_screen_enabled(),
             integrated_lock_screen_enabled: Some(default_integrated_lock_screen_enabled()),
             mpris_pause_enabled: default_mpris_pause_enabled(),
+            ignore_idle_inhibitors: default_ignore_idle_inhibitors(),
             app_inhibit_list: Vec::new(),
             panel_commands: legacy.panel_commands,
             fade_enabled: legacy.fade_enabled,
@@ -855,4 +864,53 @@ struct LegacyConfig {
     pub hotkey_start: String,
     #[serde(default = "default_hotkey_stop")]
     pub hotkey_stop: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_ignore_idle_inhibitors() {
+        assert!(DEFAULT_IGNORE_IDLE_INHIBITORS);
+        assert!(default_ignore_idle_inhibitors());
+        let profile = SettingsProfile::new("Test".to_string());
+        assert!(profile.ignore_idle_inhibitors);
+    }
+
+    #[test]
+    fn test_config_default_has_ignore_idle_inhibitors() {
+        let config = Config::default();
+        for profile in &config.profiles {
+            assert!(profile.ignore_idle_inhibitors);
+        }
+    }
+
+    #[test]
+    fn test_config_serde_ignore_idle_inhibitors() {
+        let mut config = Config::default();
+        config.profiles[0].ignore_idle_inhibitors = false;
+        let json = serde_json::to_string(&config).expect("serialization failed");
+        let deserialized: Config = serde_json::from_str(&json).expect("deserialization failed");
+        assert!(!deserialized.profiles[0].ignore_idle_inhibitors);
+        assert!(deserialized.profiles[1].ignore_idle_inhibitors);
+    }
+
+    #[test]
+    fn test_backward_compatibility_missing_ignore_idle_inhibitors() {
+        let json = r##"{
+            "profiles": [
+                {
+                    "name": "Profile 1",
+                    "inactivity_seconds": 300,
+                    "mode": { "Color": "#000000" },
+                    "mute_video": true
+                }
+            ]
+        }"##;
+        let config: Config =
+            serde_json::from_str(json).expect("deserialization of old config failed");
+        assert_eq!(config.profiles.len(), 1);
+        assert!(config.profiles[0].ignore_idle_inhibitors);
+    }
 }

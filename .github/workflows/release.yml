@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release (e.g. v1.2.0)'
+        required: false
+        default: 'v1.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libwebkitgtk-6.0-dev \
+            librsvg2-bin \
+            libfuse2 \
+            dpkg-dev \
+            rpm \
+            zstd \
+            file \
+            wget
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Run unit tests
+        run: cargo test --release
+
+      - name: Build Debian package (.deb)
+        run: bash scripts/build_deb.sh --no-build
+
+      - name: Build Pacman package (.pkg.tar.zst)
+        run: bash scripts/build_pacman.sh --no-build
+
+      - name: Build RPM package (.rpm)
+        run: bash scripts/build_rpm.sh --no-build
+
+      - name: Install appimagetool and build AppImage
+        run: |
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract
+          sudo mv squashfs-root /opt/appimagetool
+          sudo ln -sf /opt/appimagetool/AppRun /usr/local/bin/appimagetool
+          bash scripts/build_appimage.sh --no-build
+
+      - name: Collect release assets
+        id: assets
+        run: |
+          mkdir -p release_assets
+          cp -f dist/*.AppImage release_assets/ || true
+          cp -f dist/deb/*.deb release_assets/ || true
+          cp -f dist/rpm/*.rpm release_assets/ || true
+          cp -f dist/pacman/*.pkg.tar.zst release_assets/ || true
+          ls -lh release_assets/
+
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "TAG=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(awk -F'"' '/^version[[:space:]]*=[[:space:]]*"/ {print $2; exit}' Cargo.toml)
+            echo "TAG=v${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.TAG }}
+          name: Vesper ${{ steps.tag.outputs.TAG }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
