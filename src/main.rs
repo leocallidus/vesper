@@ -50,7 +50,9 @@ pub enum AppMessage {
     ToggleEnabled(bool),
     ToggleInhibitSleep(bool),
     ToggleIgnoreIdleInhibitors(bool),
+    ToggleTrayClickStartsScreensaver(bool),
     SetTrayIconVisible(bool),
+    TrayActivate,
     ShowMainWindow,
     UpdateConfig(Config),
     Quit,
@@ -376,6 +378,11 @@ fn main() {
                     config.active_profile_mut().ignore_idle_inhibitors = ignore;
                     let _ = config.save();
                 }
+                AppMessage::ToggleTrayClickStartsScreensaver(enabled) => {
+                    let mut config = state_receiver.config.lock().unwrap();
+                    config.tray_click_starts_screensaver = enabled;
+                    let _ = config.save();
+                }
                 AppMessage::SetTrayIconVisible(visible) => {
                     let _ = state_receiver.tray_control.send(TrayCommand::SetVisible(visible));
                     state_receiver.config.lock().unwrap().tray_icon_enabled = visible;
@@ -405,6 +412,18 @@ fn main() {
                     set_inhibit_sleep(Arc::clone(&state_receiver), inhibit);
                     if let Ok(mut status) = state_receiver.status.lock() {
                         update_status_profile(&mut status, &config, lang);
+                    }
+                }
+                AppMessage::TrayActivate => {
+                    let starts_screensaver = state_receiver
+                        .config
+                        .lock()
+                        .unwrap()
+                        .tray_click_starts_screensaver;
+                    if starts_screensaver {
+                        start_screensaver(Arc::clone(&state_receiver));
+                    } else if let Some(main_window) = state_receiver.main_window.lock().unwrap().as_ref() {
+                        main_window.present();
                     }
                 }
                 AppMessage::ShowMainWindow => {

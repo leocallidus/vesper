@@ -10,6 +10,8 @@ pub struct AutostartWidgets {
     pub autostart_switch: Switch,
     pub start_minimized_switch: Switch,
     pub tray_icon_switch: Switch,
+    pub tray_click_row: adw::ActionRow,
+    pub tray_click_switch: Switch,
 }
 
 pub fn build_autostart_group(config: &Config, lang: Language) -> AutostartWidgets {
@@ -50,10 +52,27 @@ pub fn build_autostart_group(config: &Config, lang: Language) -> AutostartWidget
     tray_icon_row.add_suffix(&tray_icon_switch);
     group.add(&tray_icon_row);
 
+    let tray_click_row = adw::ActionRow::builder()
+        .title(tr(lang, "Запуск заставки по клику на значок"))
+        .subtitle(tr(
+            lang,
+            "Запускать скринсейвер при нажатии левой кнопкой мыши на значок в трее",
+        ))
+        .build();
+    let tray_click_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(config.tray_click_starts_screensaver)
+        .build();
+    tray_click_row.add_suffix(&tray_click_switch);
+    tray_click_row.set_sensitive(config.tray_icon_enabled);
+    group.add(&tray_click_row);
+
     AutostartWidgets {
         group,
         autostart_switch,
         start_minimized_switch,
         tray_icon_switch,
+        tray_click_row,
+        tray_click_switch,
     }
 }

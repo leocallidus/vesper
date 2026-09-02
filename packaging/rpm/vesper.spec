@@ -1,5 +1,5 @@
 Name:           vesper
-Version:        1.2.0
+Version:        1.2.1
 Release:        1%{?dist}
 Summary:        Linux desktop screensaver written in Rust with GTK4
 

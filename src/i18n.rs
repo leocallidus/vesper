@@ -491,6 +491,10 @@ pub fn tr(language: Language, key: &'static str) -> &'static str {
         }
         "Показывать значок в трее" => "Show tray icon",
         "Отображать иконку в системном трее" => "Display the system tray icon",
+        "Запуск заставки по клику на значок" => "Launch screensaver on tray icon click",
+        "Запускать скринсейвер при нажатии левой кнопкой мыши на значок в трее" => {
+            "Launch screensaver immediately on tray icon left-click"
+        }
         "Интерактивный шейдер" => "Interactive shader",
         "Разрешить управление мышью (закрытие только с клавиатуры)" => {
             "Allow mouse control (close with keyboard only)"
@@ -537,6 +541,25 @@ mod tests {
                 "Таймер срабатывает надежно, даже если сайты (Spotify, Музыка) или плееры блокируют режим простоя"
             ),
             "Triggers reliably even if websites (Spotify, Music) or players block idle mode"
+        );
+    }
+
+    #[test]
+    fn test_tray_click_translations() {
+        assert_eq!(
+            tr(Language::Russian, "Запуск заставки по клику на значок"),
+            "Запуск заставки по клику на значок"
+        );
+        assert_eq!(
+            tr(Language::English, "Запуск заставки по клику на значок"),
+            "Launch screensaver on tray icon click"
+        );
+        assert_eq!(
+            tr(
+                Language::English,
+                "Запускать скринсейвер при нажатии левой кнопкой мыши на значок в трее"
+            ),
+            "Launch screensaver immediately on tray icon left-click"
         );
     }
 }

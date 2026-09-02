@@ -127,7 +127,7 @@ impl Tray for TrayHandler {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        let _ = self.sender.send(AppMessage::ShowMainWindow);
+        let _ = self.sender.send(AppMessage::TrayActivate);
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -139,6 +139,7 @@ impl Tray for TrayHandler {
         let lang = resolve_language(config.language);
         let active_profile = config.active_profile_index();
         let ignore_idle_inhibitors = config.active_profile().ignore_idle_inhibitors;
+        let tray_click_starts_screensaver = config.tray_click_starts_screensaver;
         let profile_items: Vec<MenuItem<Self>> = config
             .profiles
             .iter()
@@ -192,6 +193,17 @@ impl Tray for TrayHandler {
                     let _ = this
                         .sender
                         .send(AppMessage::ToggleIgnoreIdleInhibitors(!ignore_idle_inhibitors));
+                }),
+                ..Default::default()
+            }
+            .into(),
+            CheckmarkItem {
+                label: tr(lang, "Запуск заставки по клику на значок").into(),
+                checked: tray_click_starts_screensaver,
+                activate: Box::new(move |this: &mut Self| {
+                    let _ = this.sender.send(AppMessage::ToggleTrayClickStartsScreensaver(
+                        !tray_click_starts_screensaver,
+                    ));
                 }),
                 ..Default::default()
             }

@@ -19,6 +19,7 @@ pub const DEFAULT_IGNORE_IDLE_INHIBITORS: bool = true;
 pub const DEFAULT_MPRIS_PAUSE_ENABLED: bool = true;
 pub const DEFAULT_START_MINIMIZED: bool = false;
 pub const DEFAULT_TRAY_ICON_ENABLED: bool = true;
+pub const DEFAULT_TRAY_CLICK_STARTS_SCREENSAVER: bool = true;
 pub const DEFAULT_CLOCK_FORMAT: &str = "%H:%M:%S";
 pub const DEFAULT_CLOCK_TIME_FORMAT: &str = "%H:%M";
 pub const DEFAULT_CLOCK_DATE_FORMAT: &str = "%d.%m.%Y";
@@ -354,6 +355,8 @@ pub struct Config {
     pub start_minimized: bool,
     #[serde(default = "default_tray_icon_enabled")]
     pub tray_icon_enabled: bool,
+    #[serde(default = "default_tray_click_starts_screensaver")]
+    pub tray_click_starts_screensaver: bool,
     #[serde(default)]
     pub settings_window: Option<WindowGeometry>,
     #[serde(default = "default_hotkey_start")]
@@ -377,6 +380,7 @@ impl Default for Config {
             language: default_language(),
             start_minimized: default_start_minimized(),
             tray_icon_enabled: default_tray_icon_enabled(),
+            tray_click_starts_screensaver: default_tray_click_starts_screensaver(),
             settings_window: None,
             hotkey_start: default_hotkey_start(),
             hotkey_stop: default_hotkey_stop(),
@@ -413,6 +417,10 @@ fn default_start_minimized() -> bool {
 
 fn default_tray_icon_enabled() -> bool {
     DEFAULT_TRAY_ICON_ENABLED
+}
+
+fn default_tray_click_starts_screensaver() -> bool {
+    DEFAULT_TRAY_CLICK_STARTS_SCREENSAVER
 }
 
 fn default_total_runtime_seconds() -> u64 {
@@ -773,6 +781,7 @@ impl Config {
             language: default_language(),
             start_minimized: default_start_minimized(),
             tray_icon_enabled: default_tray_icon_enabled(),
+            tray_click_starts_screensaver: default_tray_click_starts_screensaver(),
             settings_window: legacy.settings_window,
             hotkey_start: legacy.hotkey_start,
             hotkey_stop: legacy.hotkey_stop,
@@ -912,5 +921,39 @@ mod tests {
             serde_json::from_str(json).expect("deserialization of old config failed");
         assert_eq!(config.profiles.len(), 1);
         assert!(config.profiles[0].ignore_idle_inhibitors);
+    }
+
+    #[test]
+    fn test_default_tray_click_starts_screensaver() {
+        assert!(DEFAULT_TRAY_CLICK_STARTS_SCREENSAVER);
+        assert!(default_tray_click_starts_screensaver());
+        let config = Config::default();
+        assert!(config.tray_click_starts_screensaver);
+    }
+
+    #[test]
+    fn test_config_serde_tray_click_starts_screensaver() {
+        let mut config = Config::default();
+        config.tray_click_starts_screensaver = false;
+        let json = serde_json::to_string(&config).expect("serialization failed");
+        let deserialized: Config = serde_json::from_str(&json).expect("deserialization failed");
+        assert!(!deserialized.tray_click_starts_screensaver);
+    }
+
+    #[test]
+    fn test_backward_compatibility_missing_tray_click_starts_screensaver() {
+        let json = r##"{
+            "profiles": [
+                {
+                    "name": "Profile 1",
+                    "inactivity_seconds": 300,
+                    "mode": { "Color": "#000000" },
+                    "mute_video": true
+                }
+            ]
+        }"##;
+        let config: Config =
+            serde_json::from_str(json).expect("deserialization of old config failed");
+        assert!(config.tray_click_starts_screensaver);
     }
 }

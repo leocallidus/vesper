@@ -60,10 +60,28 @@ if command -v rsvg-convert >/dev/null 2>&1; then
     "${ROOT_DIR}/packaging/appimage/${APP_NAME}.svg" || true
 fi
 
+echo "Bundling dependencies..."
+python3 "${ROOT_DIR}/scripts/bundle_appimage_deps.py" "${APPDIR}"
+
 cat > "${APPDIR}/AppRun" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 HERE="$(dirname "$(readlink -f "$0")")"
+
+export APPDIR="${HERE}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/lib64:${HERE}/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export GSETTINGS_SCHEMA_DIR="${HERE}/usr/share/glib-2.0/schemas:${GSETTINGS_SCHEMA_DIR:-}"
+
+if [ -d "${HERE}/usr/lib/webkitgtk-6.0" ]; then
+  export WEBKIT_EXEC_PATH="${HERE}/usr/lib/webkitgtk-6.0"
+elif [ -d "${HERE}/usr/lib/x86_64-linux-gnu/webkitgtk-6.0" ]; then
+  export WEBKIT_EXEC_PATH="${HERE}/usr/lib/x86_64-linux-gnu/webkitgtk-6.0"
+elif [ -d "${HERE}/usr/libexec/webkitgtk-6.0" ]; then
+  export WEBKIT_EXEC_PATH="${HERE}/usr/libexec/webkitgtk-6.0"
+fi
+
 exec "${HERE}/usr/bin/vesper" "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"

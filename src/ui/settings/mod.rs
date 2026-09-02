@@ -52,6 +52,8 @@ struct SettingsUiRefs {
     language_row: adw::ComboRow,
     start_minimized_switch: Switch,
     tray_icon_switch: Switch,
+    tray_click_row: adw::ActionRow,
+    tray_click_switch: Switch,
     start_hotkey_entry: Entry,
     stop_hotkey_entry: Entry,
     panic_hotkey_entry: Entry,
@@ -187,6 +189,7 @@ impl SettingsController {
             hotkey_panic,
             start_minimized,
             tray_icon_enabled,
+            tray_click_starts_screensaver,
             autostart_enabled,
             clamped,
             total_profiles,
@@ -205,6 +208,7 @@ impl SettingsController {
             let hotkey_panic = config.hotkey_panic.clone();
             let start_minimized = config.start_minimized;
             let tray_icon_enabled = config.tray_icon_enabled;
+            let tray_click_starts_screensaver = config.tray_click_starts_screensaver;
             let autostart_enabled = crate::autostart::is_autostart_enabled();
             let total_profiles = config.profiles.len();
             (
@@ -215,6 +219,7 @@ impl SettingsController {
                 hotkey_panic,
                 start_minimized,
                 tray_icon_enabled,
+                tray_click_starts_screensaver,
                 autostart_enabled,
                 clamped,
                 total_profiles,
@@ -233,6 +238,8 @@ impl SettingsController {
         self.ui.language_row.set_selected(language_index(language));
         self.ui.start_minimized_switch.set_active(start_minimized);
         self.ui.tray_icon_switch.set_active(tray_icon_enabled);
+        self.ui.tray_click_switch.set_active(tray_click_starts_screensaver);
+        self.ui.tray_click_row.set_sensitive(tray_icon_enabled);
         self.ui.autostart_switch.set_active(autostart_enabled);
 	        set_hotkey_entry(&self.ui.start_hotkey_entry, &hotkey_start);
 	        set_hotkey_entry(&self.ui.stop_hotkey_entry, &hotkey_stop);
@@ -766,6 +773,7 @@ impl SettingsController {
 
         config.language = language_from_index(self.ui.language_row.selected());
         config.tray_icon_enabled = self.ui.tray_icon_switch.is_active();
+        config.tray_click_starts_screensaver = self.ui.tray_click_switch.is_active();
         config.start_minimized = self.ui.start_minimized_switch.is_active();
         config.hotkey_start = hotkey_entry_accel(&self.ui.start_hotkey_entry);
         config.hotkey_stop = hotkey_entry_accel(&self.ui.stop_hotkey_entry);
@@ -910,6 +918,8 @@ impl SettingsWindow {
             autostart_switch,
             start_minimized_switch,
             tray_icon_switch,
+            tray_click_row,
+            tray_click_switch,
             ..
         } = autostart_widgets;
 
@@ -1500,6 +1510,8 @@ impl SettingsWindow {
                 language_row: language_row.clone(),
                 start_minimized_switch: start_minimized_switch.clone(),
                 tray_icon_switch: tray_icon_switch.clone(),
+                tray_click_row: tray_click_row.clone(),
+                tray_click_switch: tray_click_switch.clone(),
                 start_hotkey_entry: start_hotkey_entry.clone(),
                 stop_hotkey_entry: stop_hotkey_entry.clone(),
                 panic_hotkey_entry: panic_hotkey_entry.clone(),
@@ -2063,6 +2075,7 @@ impl SettingsWindow {
                     return;
                 }
                 let tray_enabled = controller.ui.tray_icon_switch.is_active();
+                controller.ui.tray_click_row.set_sensitive(tray_enabled);
                 if !tray_enabled && controller.ui.start_minimized_switch.is_active() {
                     toast_overlay.add_toast(adw::Toast::new(tr(
                         controller.lang,
@@ -2071,6 +2084,16 @@ impl SettingsWindow {
                 }
                 controller.mark_modified();
                 let _ = sender.send(AppMessage::SetTrayIconVisible(tray_enabled));
+            }
+        });
+
+        tray_click_switch.connect_notify_local(Some("active"), {
+            let controller = controller.clone();
+            move |_, _| {
+                if controller.profile_update_guard.get() {
+                    return;
+                }
+                controller.mark_modified();
             }
         });
 

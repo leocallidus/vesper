@@ -120,9 +120,10 @@ The `.deb` will be created at `dist/deb/vesper_<version>_<arch>.deb`.
 
 ## System tray menu
 
-- Enabled / Block sleep toggles
+- Enabled / Block sleep / Ignore idle inhibitors / Launch screensaver on tray icon click toggles
 - Profiles submenu
 - Settings, Start, Exit
+- Left-clicking the tray icon launches the screensaver immediately (configurable)
 
 ## Screenshots
 

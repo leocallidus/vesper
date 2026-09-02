@@ -1,6 +1,6 @@
 # Maintainer: leocallidus <leoalekseev27@gmail.com>
 pkgname=vesper
-pkgver=1.2.0
+pkgver=1.2.1
 pkgrel=1
 pkgdesc="Linux desktop screensaver written in Rust with GTK4"
 arch=('x86_64')
